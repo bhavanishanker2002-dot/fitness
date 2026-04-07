@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <meta name="mobile-web-app-capable" content="yes">
-<title>NBS Journal v11</title>
+<title>NBS Journal v13</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -14,10 +15,30 @@ body{background:#070707;color:#e0e0e0;font-family:'DM Sans',sans-serif;min-heigh
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#070707}::-webkit-scrollbar-thumb{background:#1e1e1e;border-radius:2px}
 select option{background:#111}input,select,textarea{font-family:'DM Mono',monospace}
 .fade{animation:fi .18s ease}@keyframes fi{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-input[type=color]{-webkit-appearance:none;border:none;padding:0;cursor:pointer}
+input[type="color"]{ -webkit-appearance:none; appearance:none; border:none; padding:0; cursor:pointer; }
 input[type=color]::-webkit-color-swatch-wrapper{padding:2px}
 input[type=color]::-webkit-color-swatch{border-radius:4px;border:1px solid #333}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+/* ADD INSIDE <style> */
+.pdf-export-wrapper{font-family:Arial,Helvetica,sans-serif;color:#2A2A2A;background:#fff;padding:40px}
+.pdf-export-wrapper h1,.pdf-export-wrapper h2,.pdf-export-wrapper h3{font-family:Georgia,'Times New Roman',serif;color:#0B1120;margin-bottom:10px}
+.pdf-export-wrapper .pdf-header{font-size:32px;font-weight:bold;border-bottom:2px solid #C9A84C;padding-bottom:15px;margin-bottom:25px;color:#0B1120}
+.pdf-export-wrapper .pdf-section-title{font-size:16px;color:#0B1120;border-bottom:2px solid #C9A84C;display:inline-block;padding-bottom:4px;margin-bottom:12px;margin-top:20px}
+.pdf-export-wrapper table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:10px}
+.pdf-export-wrapper th{background:#0B1120;color:#fff;padding:7px 9px;text-align:left;border:1px solid #C9A84C;font-weight:normal}
+.pdf-export-wrapper td{padding:7px 9px;border:1px solid #C9A84C;background:#fff}
+.pdf-export-wrapper tr:nth-child(even) td{background:#FAF8F3}
+.pdf-export-wrapper .pdf-footer{border-top:1px solid #C9A84C;padding-top:10px;font-size:9px;color:#777;font-style:italic;text-align:center;margin-top:20px}
+.pdf-export-wrapper .text-green{color:#1B7A3D;font-weight:bold}
+.pdf-export-wrapper .text-red{color:#B22222;font-weight:bold}
+.pdf-export-wrapper .text-navy{color:#0B1120;font-weight:bold}
+.pdf-export-wrapper .snapshot-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-bottom:20px}
+.pdf-export-wrapper .snapshot-box{border:1px solid #C9A84C;padding:12px;background:#FAF8F3;text-align:center}
+.pdf-export-wrapper .snapshot-label{font-size:9px;text-transform:uppercase;color:#555;margin-bottom:5px;letter-spacing:1px}
+.pdf-export-wrapper .snapshot-val{font-size:18px;font-weight:bold;color:#0B1120}
+.pdf-export-wrapper p{font-size:11px;line-height:1.6;margin-bottom:12px;text-align:justify}
+.preview-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.9);z-index:1000;display:flex;flex-direction:column;align-items:center;padding:20px;overflow-y:auto}
+.preview-content{background:#fff;width:100%;max-width:900px;border-radius:4px;overflow:hidden}
 </style>
 </head>
 <body>
@@ -26,7 +47,11 @@ input[type=color]::-webkit-color-swatch{border-radius:4px;border:1px solid #333}
 // ── STORAGE ──
 var LS={
   read(){try{var d=localStorage.getItem("nbs9");return d?JSON.parse(d):null}catch(e){return null}},
-  write(data){try{localStorage.setItem("nbs9",JSON.stringify(data))}catch(e){}}
+write(data){try{localStorage.setItem("nbs9",JSON.stringify(data))}catch(e){}}
+};
+var REPORTS_LS={
+  read(){try{return JSON.parse(localStorage.getItem("nbs9_reports")||"{}")}catch(e){return {}}},
+  write(data){try{localStorage.setItem("nbs9_reports",JSON.stringify(data))}catch(e){}}
 };
 var CREDS={
   get(){try{return JSON.parse(localStorage.getItem("nbs9c")||"null")}catch(e){return null}},
@@ -46,7 +71,6 @@ var CLOUD={
     if(r.status===404)throw new Error("404 gist not found");
     if(!r.ok)throw new Error("HTTP "+r.status);
     var j=await r.json();
-    // try both filenames for backwards compatibility with v9/v10 gists
     var raw=(j.files&&j.files["nbs.json"]&&j.files["nbs.json"].content)||(j.files&&j.files["nbs_data.json"]&&j.files["nbs_data.json"].content);
     if(!raw)throw new Error("No data file found in gist (tried nbs.json and nbs_data.json)");
     return JSON.parse(raw);
@@ -55,37 +79,19 @@ var CLOUD={
     var r=await fetch(this.B+"/"+id,{method:"PATCH",headers:{"Content-Type":"application/json","Authorization":"token "+token,"Accept":"application/vnd.github+json"},body:JSON.stringify({files:{"nbs.json":{content:JSON.stringify(data)}}})});
     if(!r.ok)throw new Error("Save failed "+r.status);
   }
+
 };
 
 // ── CONSTANTS ──
-var DEFAULT_SWAPS={
-  EURUSD:{long:-3.5,short:1.2},
-  USDJPY:{long:2.1,short:-5.8},
-  GBPUSD:{long:-4.2,short:1.5},
-  GBPJPY:{long:-1.8,short:-3.2},
-  AUDUSD:{long:-3.1,short:0.8},
-  USDCAD:{long:0.9,short:-4.1},
-  XAUUSD:{long:-8.5,short:3.2},
-  NZDUSD:{long:-2.8,short:0.5},
-  USDCHF:{long:1.4,short:-4.9},
-  EURJPY:{long:-2.1,short:-2.8},
-  AUDJPY:{long:0.5,short:-4.2},
-  CADJPY:{long:0.8,short:-4.5}
-};
-function getSwapRate(firm,pair,direction){
-  if(!firm||!pair)return 0;
-  var swaps=firm.swapRates||DEFAULT_SWAPS;
-  var pairSwap=swaps[pair]||{long:0,short:0};
-  return direction==="BUY"?(pairSwap.long||0):(pairSwap.short||0);
-}
 var DEF_FIRMS=[
-  {id:1,name:"Personal Account",color:"#c8f135",accountSize:10000,profitTarget:0,maxDaily:0,maxDrawdown:0,phase:"Live",isPersonal:true,commission:0,swapRates:Object.assign({},DEFAULT_SWAPS)},
-  {id:2,name:"FTMO",color:"#3b82f6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:7,swapRates:Object.assign({},DEFAULT_SWAPS)},
-  {id:3,name:"The Funded Trader",color:"#8b5cf6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:6,swapRates:Object.assign({},DEFAULT_SWAPS)},
-  {id:4,name:"E8 Funding",color:"#f59e0b",accountSize:100000,profitTarget:8,maxDaily:4,maxDrawdown:8,phase:"Challenge",isPersonal:false,commission:7,swapRates:Object.assign({},DEFAULT_SWAPS)},
-  {id:5,name:"Apex Trader",color:"#10b981",accountSize:50000,profitTarget:6,maxDaily:3,maxDrawdown:6,phase:"Challenge",isPersonal:false,commission:0,swapRates:Object.assign({},DEFAULT_SWAPS)},
-  {id:6,name:"MyFundedFX",color:"#ef4444",accountSize:100000,profitTarget:8,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:6,swapRates:Object.assign({},DEFAULT_SWAPS)}
+  {id:1,name:"Personal Account",color:"#c8f135",accountSize:10000,profitTarget:0,maxDaily:0,maxDrawdown:0,phase:"Live",isPersonal:true,commission:0,swaps:{}},
+  {id:2,name:"FTMO",color:"#3b82f6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:7,swaps:{}},
+  {id:3,name:"The Funded Trader",color:"#8b5cf6",accountSize:100000,profitTarget:10,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:6,swaps:{}},
+  {id:4,name:"E8 Funding",color:"#f59e0b",accountSize:100000,profitTarget:8,maxDaily:4,maxDrawdown:8,phase:"Challenge",isPersonal:false,commission:7,swaps:{}},
+  {id:5,name:"Apex Trader",color:"#10b981",accountSize:50000,profitTarget:6,maxDaily:3,maxDrawdown:6,phase:"Challenge",isPersonal:false,commission:0,swaps:{}},
+  {id:6,name:"MyFundedFX",color:"#ef4444",accountSize:100000,profitTarget:8,maxDaily:5,maxDrawdown:10,phase:"Challenge",isPersonal:false,commission:6,swaps:{}}
 ];
+var SETUP_TYPES=["TREND_CONT","BREAKOUT","MEAN_REV","MACRO_EVENT","REVERSAL","OTHER"];
 var PAIRS=["EURUSD","USDJPY","GBPUSD","GBPJPY","AUDUSD","USDCAD","XAUUSD","NZDUSD","USDCHF","EURJPY","AUDJPY","CADJPY"];
 var SESSIONS=["Tokyo","London","New York","London/NY Overlap","Asian/London Overlap"];
 var REGIMES=["Trending — Strong","Trending — Weak","Range — Avoid","Breakout","Choppy — Avoid"];
@@ -127,7 +133,7 @@ function calcRR(e,sl,tp,dir){
   return parseFloat(((dir==="BUY"?tv-ev:ev-tv)/Math.abs(ev-sv)).toFixed(2));
 }
 function rrC(r){return r>=4?"#34d399":r>=2?"#c8f135":r>=1?"#f0a500":"#ff4444"}
-function parseDate(ts){if(!ts)return null;try{var d=new Date(ts.replace(" — "," "));return isNaN(d)?null:d}catch(e){return null}}
+function parseDate(ts){if(!ts)return null;try{if(ts instanceof Date){return isNaN(ts)?null:ts;}var s=String(ts).trim();s=s.replace(/\s*[—–]\s*/g," ").replace(/\s+/g," ");var d=new Date(s);if(!isNaN(d))return d;var iso=s.replace(/ /g,"T");d=new Date(iso);return isNaN(d)?null:d}catch(e){return null}}
 function dKey(d){if(!d)return null;var dt=d instanceof Date?d:new Date(d);if(isNaN(dt))return null;return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0")}
 function addDays(d,n){var r=new Date(d);r.setDate(r.getDate()+n);return r}
 function fmtC(n){if(n==null||isNaN(n))return"–";var s=Math.abs(n)>=1000?"$"+(Math.abs(n)/1000).toFixed(1)+"k":"$"+Math.abs(n).toFixed(0);return n<0?"-"+s:"+"+s}
@@ -135,13 +141,22 @@ function fmtP(n){return n==null||isNaN(n)?"–":(n>=0?"+":"")+n.toFixed(2)+"%"}
 function getWk(d){var t=new Date(d);t.setHours(0,0,0,0);var day=t.getDay()||7;t.setDate(t.getDate()+1-day);return t.toISOString().substring(0,10)}
 
 // ── PER-ACCOUNT RESULT ──
-// trade.accountResults[firmId] = {outcome,actualPct,exitPrice,exitWhy,afterNotes,photoAfter,exitTimestamp,xc1-4}
-// Shared fields: pair,entry,sl,tp,lots,riskPct,checklist,beforeNotes,photoBefore
 function getAccRes(trade,firmId){
   var root={outcome:trade.outcome||"",actualPct:trade.actualPct||"",exitPrice:trade.exitPrice||"",exitWhy:trade.exitWhy||"",afterNotes:trade.afterNotes||"",photoAfter:trade.photoAfter||"",exitTimestamp:trade.exitTimestamp||"",xc1:trade.xc1||false,xc2:trade.xc2||false,xc3:trade.xc3||false,xc4:trade.xc4||false};
   if(firmId==null)return root;
   var ar=trade.accountResults||{};
   return ar[String(firmId)]?ar[String(firmId)]:root;
+}
+// Returns best closed outcome for a trade across ALL accounts (perf/calendar/statsbar)
+function getCanonicalRes(trade){
+  var root={outcome:trade.outcome||"",actualPct:trade.actualPct||"",exitPrice:trade.exitPrice||"",exitWhy:trade.exitWhy||"",afterNotes:trade.afterNotes||"",photoAfter:trade.photoAfter||"",exitTimestamp:trade.exitTimestamp||"",xc1:trade.xc1||false,xc2:trade.xc2||false,xc3:trade.xc3||false,xc4:trade.xc4||false};
+  if(root.outcome&&!root.outcome.includes("Running")&&root.actualPct!=="")return root;
+  var ar=trade.accountResults||{};
+  var ids=trade.firmIds||[];
+  for(var i=0;i<ids.length;i++){var r=ar[String(ids[i])];if(r&&r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null)return r;}
+  var keys=Object.keys(ar);
+  for(var j=0;j<keys.length;j++){var r2=ar[keys[j]];if(r2&&r2.outcome&&!r2.outcome.includes("Running")&&r2.actualPct!==""&&r2.actualPct!=null)return r2;}
+  return root;
 }
 function saveOneAcc(trade,firmId,data){
   if(firmId==null)return data;
@@ -159,7 +174,319 @@ function tradePnl(t,acctSize,firmId){
   var p=parseFloat(r.actualPct);
   return isNaN(p)?null:(parseFloat(acctSize)||100000)*p/100;
 }
-
+// ── PERFORMANCE HELPERS ──
+function perfClosedTrades(trades){
+  return (trades||[]).filter(function(t){
+    var r=getCanonicalRes(t);
+    return r.outcome && !r.outcome.includes("Running") && r.actualPct!=="" && r.actualPct!=null && !isNaN(parseFloat(r.actualPct));
+  });
+}
+function perfMonthKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")}
+function perfMonthlyMap(trades){
+  var m={};
+  perfClosedTrades(trades).forEach(function(t){
+    var d=parseDate(t.timestamp); if(!d) return;
+    var k=perfMonthKey(d), p=parseFloat(getCanonicalRes(t).actualPct)||0;
+    if(!m[k]) m[k]={ret:0,trades:0,wins:0,losses:0};
+    m[k].ret+=p; m[k].trades++;
+    if(p>0)m[k].wins++; else if(p<0)m[k].losses++;
+  });
+  return m;
+}
+function perfOrderedMonthKeys(m){
+  return Object.keys(m).sort(function(a,b){return new Date(a+"-01")-new Date(b+"-01")});
+}
+function perfMean(arr){if(!arr.length)return 0; return arr.reduce(function(a,b){return a+b},0)/arr.length}
+function perfStd(arr){
+  if(arr.length<2)return 0;
+  var mu=perfMean(arr);
+  var v=arr.reduce(function(a,b){return a+Math.pow(b-mu,2)},0)/(arr.length-1);
+  return Math.sqrt(v);
+}
+function perfDownsideDev(arr){
+  var neg=arr.filter(function(x){return x<0});
+  if(!neg.length)return 0;
+  var v=neg.reduce(function(a,b){return a+Math.pow(b,2)},0)/neg.length;
+  return Math.sqrt(v);
+}
+function perfAnnualized(monthlyReturns){
+  if(!monthlyReturns.length)return 0;
+  var eq=1;
+  monthlyReturns.forEach(function(r){eq*=(1+r/100);});
+  return (Math.pow(eq,12/monthlyReturns.length)-1)*100;
+}
+function perfEquitySeries(trades){
+  var closed=perfClosedTrades(trades).slice().sort(function(a,b){return (parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0)});
+  var eq=100, out=[{date:null,bal:eq,pct:0}];
+  closed.forEach(function(t){
+    var p=parseFloat(getCanonicalRes(t).actualPct)||0;
+    eq=eq*(1+p/100);
+    out.push({date:parseDate(t.timestamp),bal:eq,pct:p,trade:t});
+  });
+  return out;
+}
+function perfDrawdownSeries(equity){
+  var peak=equity.length?equity[0].bal:100;
+  var arr=[], maxDD=0, curStart=null, maxDur=0;
+  equity.forEach(function(e){
+    if(e.bal>peak){peak=e.bal;}
+    var dd=peak?((e.bal-peak)/peak*100):0;
+    arr.push({date:e.date,dd:dd,bal:e.bal});
+    if(dd<maxDD)maxDD=dd;
+  });
+  var runStart=null,runPeak=equity.length?equity[0].bal:100, lastDate=null;
+  equity.forEach(function(e){
+    if(e.bal>=runPeak){runPeak=e.bal; runStart=e.date;}
+    if(e.bal<runPeak && runStart && e.date){ lastDate=e.date; }
+    if(e.bal>=runPeak && runStart && lastDate){
+      var dur=Math.floor((e.date-lastDate)/86400000);
+      if(dur>maxDur)maxDur=dur;
+      lastDate=null;
+    }
+  });
+  var currentDD=arr.length?arr[arr.length-1].dd:0;
+  return {series:arr,maxDD:Math.abs(maxDD),currentDD:Math.abs(currentDD),maxDuration:maxDur};
+}
+function perfPFExpectancy(trades){
+  var closed=perfClosedTrades(trades);
+  var wins=closed.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0});
+  var losses=closed.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)<0});
+  var gp=wins.reduce(function(a,t){return a+parseFloat(getCanonicalRes(t).actualPct)},0);
+  var gl=Math.abs(losses.reduce(function(a,t){return a+parseFloat(getCanonicalRes(t).actualPct)},0));
+  var pf=gl>0?gp/gl:(wins.length?99:0);
+  var aw=wins.length?gp/wins.length:0;
+  var al=losses.length?gl/losses.length:0;
+  var tot=closed.length;
+  var exp=tot?((wins.length/tot)*aw)-((losses.length/tot)*al):0;
+  return {pf:pf,exp:exp,wins:wins.length,losses:losses.length,total:tot};
+}
+function perfAvgRAndStreaks(trades){
+  var closed=perfClosedTrades(trades).slice().sort(function(a,b){return (parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0)});
+  var rs=[], cw=0,cl=0,mw=0,ml=0;
+  closed.forEach(function(t){
+    var ap=parseFloat(getCanonicalRes(t).actualPct), rp=parseFloat(t.riskPct||0);
+    var r=(!isNaN(ap)&&!isNaN(rp)&&rp>0)?(ap/rp):null;
+    if(r!=null && isFinite(r))rs.push(r);
+    if(ap>0){cw++;cl=0;if(cw>mw)mw=cw;}
+    else if(ap<0){cl++;cw=0;if(cl>ml)ml=cl;}
+    else{cw=0;cl=0;}
+  });
+  return {avgR:rs.length?perfMean(rs):0,maxWins:mw,maxLosses:ml,rValues:rs};
+}
+function perfSetupWinRates(trades){
+  var closed=perfClosedTrades(trades), m={};
+  closed.forEach(function(t){
+    var s=t.setupType||"OTHER", p=parseFloat(getCanonicalRes(t).actualPct)||0;
+    if(!m[s])m[s]={t:0,w:0};
+    m[s].t++; if(p>0)m[s].w++;
+  });
+  return Object.keys(m).map(function(k){
+    var o=m[k];
+    return {setup:k,total:o.t,wr:o.t?o.w/o.t*100:0};
+  }).sort(function(a,b){return b.total-a.total});
+}
+function perfRolling(arr,win,fn){
+  var out=[];
+  for(var i=0;i<arr.length;i++){
+    if(i+1<win){out.push(null);continue;}
+    var sub=arr.slice(i+1-win,i+1);
+    out.push(fn(sub));
+  }
+  return out;
+}
+function perfCorr(a,b){
+  var n=Math.min(a.length,b.length);
+  if(n<2)return null;
+  var x=a.slice(a.length-n), y=b.slice(b.length-n);
+  var mx=perfMean(x), my=perfMean(y);
+  var num=0,dx=0,dy=0;
+  for(var i=0;i<n;i++){
+    var vx=x[i]-mx, vy=y[i]-my;
+    num+=vx*vy; dx+=vx*vx; dy+=vy*vy;
+  }
+  if(!dx||!dy)return null;
+  return num/Math.sqrt(dx*dy);
+}
+// ── PER-ACCOUNT HELPERS ──
+function perfMonthlyMapForAccount(trades,firmId){
+  var m={};
+  trades.forEach(function(t){
+    if(firmId!=null&&!(t.firmIds||[]).includes(firmId))return;
+    var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
+    var p=parseFloat(r.actualPct);
+    if(!r.outcome||r.outcome.includes("Running")||isNaN(p)||r.actualPct==null||r.actualPct==="")return;
+    var d=parseDate(t.timestamp);if(!d)return;
+    var k=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+    if(!m[k])m[k]={ret:0,trades:0,wins:0,losses:0};
+    m[k].ret+=p;m[k].trades++;
+    if(p>0)m[k].wins++;else if(p<0)m[k].losses++;
+  });
+  return m;
+}
+function perfEquitySeriesForAccount(trades,acctSize,firmId){
+  var start=parseFloat(acctSize)||100000;
+  var subset=(trades||[]).filter(function(t){
+    if(firmId!=null&&!(t.firmIds||[]).includes(firmId))return false;
+    var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
+    return r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null&&!isNaN(parseFloat(r.actualPct));
+  });
+  var sorted=subset.slice().sort(function(a,b){return(parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0);});
+  var bal=start,out=[{bal:bal,pct:0,date:null}];
+  sorted.forEach(function(t){
+    var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
+    var p=parseFloat(r.actualPct)||0;
+    bal=bal*(1+p/100);
+    out.push({bal:bal,pct:p,date:parseDate(t.timestamp),trade:t});
+  });
+  return out;
+}
+function rpt_monthMapForAccount(trades,firmId,accountSize){
+  var m={};
+  trades.forEach(function(t){
+    if(firmId!=null&&!(t.firmIds||[]).includes(firmId))return;
+    var d=parseDate(t.timestamp);if(!d)return;
+    var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
+    var p=parseFloat(r.actualPct);
+    if(isNaN(p)||!r.outcome||r.outcome.includes("Running"))return;
+    var k=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+    if(!m[k])m[k]={ret:0,trades:[]};
+    m[k].ret+=p;m[k].trades.push(t);
+  });
+  return m;
+}
+function rpt_closedTradesForAccount(trades,firmId){
+  return trades.filter(function(t){
+    if(firmId!=null&&!(t.firmIds||[]).includes(firmId))return false;
+    var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
+    return r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null;
+  });
+}
+// ADD AFTER EXISTING HELPERS (same <script> as calcStats)
+function rpt_monthKey(d){if(!d||isNaN(d))return null;return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")}
+function rpt_quarterKey(d){if(!d||isNaN(d))return null;return d.getFullYear()+"-Q"+(Math.floor(d.getMonth()/3)+1)}
+function rpt_orderedKeys(map){return Object.keys(map).sort(function(a,b){return new Date(a+"-01")-new Date(b+"-01")})}
+function rpt_monthMap(trades){
+  var m={};
+  trades.forEach(function(t){
+    var d=parseDate(t.timestamp);if(!d)return;
+    var k=rpt_monthKey(d),r=getCanonicalRes(t),p=parseFloat(r.actualPct);
+    if(isNaN(p)||!r.outcome||r.outcome.includes("Running"))return;
+    if(!m[k])m[k]={ret:0,trades:[]};
+    m[k].ret+=p;m[k].trades.push(t);
+  });
+  return m;
+}
+function rpt_monthArr(m){return rpt_orderedKeys(m).map(function(k){return m[k].ret||0})}
+function rpt_cumFromMonthMap(m,until){
+  var keys=rpt_orderedKeys(m).filter(function(k){return !until||k<=until});
+  var eq=1;keys.forEach(function(k){eq*=(1+(m[k].ret||0)/100)});
+  return (eq-1)*100;
+}
+function rpt_ytd(m,target){
+  if(!target)return 0;
+  var p=target.split("-"),y=p[0],mm=parseInt(p[1],10),eq=1;
+  for(var i=1;i<=mm;i++){var k=y+"-"+String(i).padStart(2,"0");if(m[k])eq*=(1+(m[k].ret||0)/100)}
+  return (eq-1)*100;
+}
+function rpt_annFromMonthMap(m){
+  var keys=rpt_orderedKeys(m);if(!keys.length)return 0;
+  var cum=rpt_cumFromMonthMap(m)/100;
+  return (Math.pow(1+cum,12/keys.length)-1)*100;
+}
+function rpt_sharpeSortino(arr){
+  if(arr.length<2)return{sharpe:0,sortino:0};
+  var mean=arr.reduce(function(a,b){return a+b},0)/arr.length;
+  var v=arr.reduce(function(a,b){return a+Math.pow(b-mean,2)},0)/(arr.length-1);
+  var sd=Math.sqrt(v)||0;
+  var neg=arr.filter(function(x){return x<0});
+  var dsd=0;
+  if(neg.length>1){
+    var dm=neg.reduce(function(a,b){return a+b},0)/neg.length;
+    dsd=Math.sqrt(neg.reduce(function(a,b){return a+Math.pow(b-dm,2)},0)/(neg.length-1));
+  }else if(neg.length===1){dsd=Math.abs(neg[0]);}
+  var ann=rpt_annFromArr(arr),rf=4.5;
+  return{
+    sharpe:sd?((ann-rf)/(sd*Math.sqrt(12))):0,
+    sortino:dsd?((ann-rf)/(dsd*Math.sqrt(12))):0
+  };
+}
+function rpt_annFromArr(arr){
+  if(!arr.length)return 0;
+  var eq=1;arr.forEach(function(x){eq*=(1+x/100)});
+  var cum=eq-1;
+  return (Math.pow(1+cum,12/arr.length)-1)*100;
+}
+function rpt_maxDDFromMonthMap(m){
+  var keys=rpt_orderedKeys(m);if(!keys.length)return 0;
+  var eq=1,peak=1,max=0;
+  keys.forEach(function(k){
+    eq*=(1+(m[k].ret||0)/100);
+    if(eq>peak)peak=eq;
+    var dd=(peak-eq)/peak*100;
+    if(dd>max)max=dd;
+  });
+  return max;
+}
+function rpt_monthStats(m){
+  var keys=rpt_orderedKeys(m);if(!keys.length)return{best:null,worst:null,posPct:0};
+  var b={k:null,v:-Infinity},w={k:null,v:Infinity},pos=0;
+  keys.forEach(function(k){var r=m[k].ret||0;if(r>b.v)b={k:k,v:r};if(r<w.v)w={k:k,v:r};if(r>0)pos++;});
+  return{best:b,worst:w,posPct:pos/keys.length*100};
+}
+function rpt_tradesForMonth(trades,key){
+  return trades.filter(function(t){var d=parseDate(t.timestamp);return d&&rpt_monthKey(d)===key;});
+}
+function rpt_tradesForQuarter(trades,key){
+  return trades.filter(function(t){var d=parseDate(t.timestamp);return d&&rpt_quarterKey(d)===key;});
+}
+function rpt_closedTrades(trades){
+  return trades.filter(function(t){var r=getCanonicalRes(t);return r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null;});
+}
+function rpt_equityFromClosed(closed,startBal,firmId){
+  var bal=startBal||100000,eq=[{bal:bal,dd:0}],peak=bal;
+  closed.slice().sort(function(a,b){return(parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0)}).forEach(function(t){
+    var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);
+    var p=parseFloat(r.actualPct);
+    var pnl=isNaN(p)?0:(parseFloat(startBal)||100000)*p/100;
+    bal+=pnl;
+    if(bal>peak)peak=bal;
+    eq.push({bal:bal,dd:(peak-bal)/peak*100,t:t});
+  });
+  return eq;
+}
+function rpt_drawdownDurationDays(closed,startBal,firmId){
+  var eq=rpt_equityFromClosed(closed,startBal,firmId),maxDur=0,curStart=null;
+  for(var i=1;i<eq.length;i++){
+    var inDd=eq[i].dd>0;
+    var d=parseDate(eq[i].t.timestamp);
+    if(inDd&&curStart==null&&d)curStart=d;
+    if(!inDd&&curStart&&d){
+      var dur=Math.floor((d-curStart)/86400000);
+      if(dur>maxDur)maxDur=dur;
+      curStart=null;
+    }
+  }
+  return maxDur;
+}
+function rpt_maxConsecutive(closed){
+  var w=0,l=0,mw=0,ml=0;
+  closed.slice().sort(function(a,b){return(parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0)}).forEach(function(t){
+    var p=parseFloat(getCanonicalRes(t).actualPct)||0;
+    if(p>0){w++;l=0;if(w>mw)mw=w;}
+    else if(p<0){l++;w=0;if(l>ml)ml=l;}
+    else{w=0;l=0;}
+  });
+  return{maxWins:mw,maxLosses:ml};
+}
+function rpt_avgHoldingDays(closed){
+  var days=0,c=0;
+  closed.forEach(function(t){
+    var r=getCanonicalRes(t);
+    var st=parseDate(t.timestamp),ex=r.exitTimestamp?new Date(r.exitTimestamp):null;
+    if(st&&ex&&!isNaN(ex)){days+=(ex-st)/86400000;c++;}
+  });
+  return c?days/c:0;
+}
 // ── ANALYTICS ──
 function calcStats(trades,acctSize,firmId){
   var getR=function(t){return getAccRes(t,firmId)};
@@ -188,7 +515,6 @@ function calcStats(trades,acctSize,firmId){
 </script>
 
 <script>
-// ── REACT COMPONENTS ──
 (function(){
 var h=React.createElement;
 var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useMemo=React.useMemo;
@@ -282,7 +608,6 @@ function LotCalc(props){
 }
 
 // ── OUTCOME FORM ──
-// helper — current balance for a firm used inside forms (needs trades)
 function currentBalForForm(firm2,trades){
   if(!firm2||!trades)return firm2?firm2.accountSize:100000;
   var ft=trades.filter(function(t){return(t.firmIds||[]).includes(firm2.id)});
@@ -297,16 +622,42 @@ function OutcomeForm(props){
   var multi=firmId!=null&&(trade.firmIds||[]).length>1;
   var fc=firm?firm.color:"#888";
 
-  // auto-calc commission and swap when lots or exitTimestamp changes
+  // dynamic actual R calculation
+  var riskPct=parseFloat(trade.riskPct);
+  var actPct=parseFloat(uf.actualPct);
+  var actR=(!isNaN(actPct)&&!isNaN(riskPct)&&riskPct>0)?(actPct/riskPct).toFixed(2):null;
+
   var lots=parseFloat(uf.lots||trade.lots)||0;
   var comm=firm?(firm.commission||0)*lots:0;
-  var nights=0;
+  var calDays=0,effectiveNights=0,wednesdayRollovers=0,weekendRollovers=0;
   if(uf.exitTimestamp&&trade.timestamp){
     var en=parseDate(trade.timestamp),ex=new Date(uf.exitTimestamp);
-    if(en&&!isNaN(ex))nights=Math.max(0,Math.floor((ex-en)/86400000));
+    if(en&&!isNaN(ex)){
+      calDays=Math.max(0,Math.floor((ex-en)/86400000));
+      // Day-by-day: Wed=3×, Fri=3× (weekend rollover), Sat/Sun=0×, others=1×
+      var sd=new Date(en);sd.setHours(0,0,0,0);
+      var ed=new Date(ex);ed.setHours(0,0,0,0);
+      while(sd<ed){
+        var dw=sd.getDay();
+        if(dw===3){effectiveNights+=3;wednesdayRollovers++;}
+        else if(dw===5){effectiveNights+=3;weekendRollovers++;}
+        else if(dw!==0&&dw!==6){effectiveNights+=1;}
+        sd.setDate(sd.getDate()+1);
+      }
+    }
   }
-  var swapRate=getSwapRate(firm,trade.pair,trade.direction);
-  var swapCost=swapRate*lots*nights;
+
+  // Per-pair swap logic with legacy fallback
+  var swapRate=0;
+  if(firm){
+    if(firm.swaps&&firm.swaps[trade.pair]){
+      swapRate=trade.direction==="BUY"?(parseFloat(firm.swaps[trade.pair].long)||0):(parseFloat(firm.swaps[trade.pair].short)||0);
+    }else{
+      swapRate=trade.direction==="BUY"?(parseFloat(firm.swapLong)||0):(parseFloat(firm.swapShort)||0);
+    }
+  }
+
+  var swapCost=swapRate*lots*effectiveNights;
   var totalCost=comm+swapCost;
   var acctSize=firm?currentBalForForm(firm,props.trades||[]):100000;
   var grossPnl=parseFloat(uf.actualPct)?acctSize*parseFloat(uf.actualPct)/100:0;
@@ -320,9 +671,10 @@ function OutcomeForm(props){
       h(Chk,{label:"Closed early — emotional",warn:true,checked:uf.xc3,onChange:u("xc3")}),
       h(Chk,{label:"Moved SL after entry",warn:true,checked:uf.xc4,onChange:u("xc4")})
     ),
-    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}},
       h(Se,{label:"Outcome",value:uf.outcome,onChange:u("outcome"),options:OUTCOMES}),
-      h(I,{label:"Actual P&L %",value:uf.actualPct,onChange:function(e){setUf(function(p){return Object.assign({},p,{actualPct:e.target.value})})},placeholder:"+2 or -1"})
+      h(I,{label:"Actual P&L %",value:uf.actualPct,onChange:function(e){setUf(function(p){return Object.assign({},p,{actualPct:e.target.value})})},placeholder:"+2 or -1"}),
+      h(F,{label:"Actual R"},h("div",{style:Object.assign({},IS,{background:"#0a0a0a",color:actR?(actR>=1?"#34d399":actR>=-1?"#f0a500":"#ff4444"):"#444"})},actR?actR+"R":"–"))
     ),
     h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
       h(I,{label:"Exit Price",value:uf.exitPrice,onChange:function(e){setUf(function(p){return Object.assign({},p,{exitPrice:e.target.value})})}}),
@@ -332,7 +684,7 @@ function OutcomeForm(props){
     h(Photo,{label:"After chart",value:uf.photoAfter,onChange:u("photoAfter")}),
     h(TA,{label:"Post-trade notes",rows:3,value:uf.afterNotes,onChange:function(e){setUf(function(p){return Object.assign({},p,{afterNotes:e.target.value})})},placeholder:"What happened? Lessons?"}),
     // ── COST BREAKDOWN ──
-    firm&&(firm.commission||(firm.swapRates&&Object.keys(firm.swapRates).length))&&lots>0&&h("div",{style:{background:"rgba(0,0,0,.3)",border:"1px solid #1e1e1e",borderRadius:7,padding:11}},
+    firm&&(firm.commission||swapRate!==0)&&lots>0&&h("div",{style:{background:"rgba(0,0,0,.3)",border:"1px solid #1e1e1e",borderRadius:7,padding:11}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:8}},"Cost Breakdown — "+lots+" lots"),
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:8}},
         h("div",{style:{background:"#111",borderRadius:5,padding:"8px 9px",textAlign:"center"}},
@@ -341,9 +693,9 @@ function OutcomeForm(props){
           h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},lots+" × $"+(firm.commission||0)+" RT")
         ),
         h("div",{style:{background:"#111",borderRadius:5,padding:"8px 9px",textAlign:"center"}},
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#555",marginBottom:3}},"SWAP ("+(nights)+"N)"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#555",marginBottom:3}},"SWAP ("+calDays+"N"+(wednesdayRollovers>0?" · "+wednesdayRollovers+"×Wed":"")+(weekendRollovers>0?" · "+weekendRollovers+"×Wknd":"")+")"),
           h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:"bold",color:swapCost<=0?"#ff4444":"#34d399"}},swapCost!==0?(swapCost<0?"-$"+Math.abs(swapCost).toFixed(2):"+$"+swapCost.toFixed(2)):"$0"),
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},lots+" × $"+swapRate+" × "+nights+"d")
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},lots+" × $"+swapRate+" × "+effectiveNights+"d")
         ),
         h("div",{style:{background:"#111",borderRadius:5,padding:"8px 9px",textAlign:"center",borderTop:"2px solid "+(netPnl>=0?"#34d399":"#ff4444")+"66"}},
           h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#555",marginBottom:3}},"NET P&L"),
@@ -370,19 +722,19 @@ function OutcomeForm(props){
 }
 
 // ── TRADE CARD ──
-// firmId=null → global journal, reads/writes root outcome fields
-// firmId=number → account view, reads/writes accountResults[firmId] independently
 function TradeCard(props){
   var trade=props.trade,onUpdate=props.onUpdate,onDelete=props.onDelete,firms=props.firms,firmId=props.firmId!=null?props.firmId:null,allTrades=props.allTrades||[];
   var openState=useState(false);var open=openState[0],setOpen=openState[1];
   var editState=useState(false);var editOut=editState[0],setEditOut=editState[1];
-  var res=getAccRes(trade,firmId);
+  var res=firmId!=null?getAccRes(trade,firmId):getCanonicalRes(trade);
   var score=scoreEntry(trade);
   var hasOutcome=res.outcome&&!res.outcome.includes("Running");
   var firmNames=(trade.firmIds||[]).map(function(id){var f=firms.find(function(x){return x.id===id});return f?f.name:null}).filter(Boolean);
   var firm=firmId!=null?firms.find(function(f){return f.id===firmId}):null;
   var outCol=res.outcome&&res.outcome.includes("Win")?"green":res.outcome&&res.outcome.includes("Loss")?"red":res.outcome&&res.outcome.includes("Breakeven")?"amber":"sky";
   var pctNum=parseFloat(res.actualPct);
+  var riskPctNum=parseFloat(trade.riskPct);
+  var actR=(!isNaN(pctNum)&&!isNaN(riskPctNum)&&riskPctNum>0)?(pctNum/riskPctNum).toFixed(2):null;
   var pctCol=pctNum>=0?"#34d399":"#ff4444";
   function handleSaveOne(data){onUpdate(trade.id,saveOneAcc(trade,firmId,data));setEditOut(false)}
   function handleSaveAll(data){onUpdate(trade.id,saveAllAcc(trade,data));setEditOut(false)}
@@ -391,11 +743,12 @@ function TradeCard(props){
       h("div",{style:{flex:1,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",minWidth:0}},
         h("span",{style:{fontFamily:"'DM Mono',monospace",fontWeight:"bold",color:"white",fontSize:13}},trade.pair),
         h(Pill,{label:trade.direction,col:trade.direction==="BUY"?"green":"red",sm:true}),
+        trade.setupType&&h(Pill,{label:trade.setupType.replace("_"," "),col:"violet",sm:true}),
         trade.marketRegime&&h(Pill,{label:trade.marketRegime.split("—")[0].trim(),col:trade.marketRegime.includes("Trending")?"green":"red",sm:true}),
         firmId==null&&firmNames.slice(0,2).map(function(n){return h(Pill,{key:n,label:n,col:"sky",sm:true})}),
         firmId==null&&firmNames.length>2&&h(Pill,{label:"+"+(firmNames.length-2),col:"zinc",sm:true}),
         res.outcome&&h(Pill,{label:res.outcome.split("—")[0].trim(),col:outCol,sm:true}),
-        res.actualPct&&h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:pctCol}},(pctNum>=0?"+":"")+res.actualPct+"%")
+        res.actualPct&&h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:pctCol}},(pctNum>=0?"+":"")+res.actualPct+"%"+(actR?" ("+actR+"R)":""))
       ),
       h("div",{style:{textAlign:"right",flexShrink:0}},
         h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#3a3a3a"}},trade.timestamp?trade.timestamp.substring(0,9):""),
@@ -405,8 +758,8 @@ function TradeCard(props){
     ),
     open&&h("div",{style:{borderTop:"1px solid #131313",padding:13,display:"flex",flexDirection:"column",gap:11}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#333",letterSpacing:2,textTransform:"uppercase",marginBottom:-4}},"Shared — all accounts"),
-      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}},
-        [["Entry",trade.entry],["SL",trade.sl],["TP",trade.tp],["Lots",trade.lots],["Risk",trade.riskPct+"%"],["R:R",trade.rr?trade.rr+"R":"–"]].map(function(kv){
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}},
+        [["Entry",trade.entry],["SL",trade.sl],["TP",trade.tp],["Lots",trade.lots],["Risk",trade.riskPct+"%"],["R:R",trade.rr?trade.rr+"R":"–"],["Conf.",trade.confidence?trade.confidence+"/5":"–"]].map(function(kv){
           return h("div",{key:kv[0],style:{background:"#111",borderRadius:5,padding:"8px 9px"}},h("div",{style:LB},kv[0]),h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:"#ddd"}},kv[1]||"–"))
         })
       ),
@@ -435,7 +788,7 @@ function TradeCard(props){
               ?h("div",null,
                   res.photoAfter&&h("img",{src:res.photoAfter,alt:"",style:{width:"100%",maxHeight:190,objectFit:"contain",borderRadius:7,border:"1px solid #1e1e1e",marginBottom:7}}),
                   h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:7}},
-                    [["Outcome",res.outcome],["P&L",res.actualPct?(pctNum>=0?"+":"")+res.actualPct+"%":"–"],["Exit Price",res.exitPrice],["Exit Reason",res.exitWhy]].map(function(kv){
+                    [["Outcome",res.outcome],["P&L",res.actualPct?(pctNum>=0?"+":"")+res.actualPct+"%"+(actR?" ("+actR+"R)":""):"–"],["Exit Price",res.exitPrice],["Exit Reason",res.exitWhy]].map(function(kv){
                       return h("div",{key:kv[0],style:{background:"#111",borderRadius:5,padding:"8px 9px"}},h("div",{style:LB},kv[0]),h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:kv[0]==="P&L"?pctCol:"#ddd"}},kv[1]||"–"))
                     })
                   ),
@@ -478,10 +831,11 @@ function CalendarView(props){
     var map={};
     trades.forEach(function(t){
       var ed=parseDate(t.timestamp);if(!ed)return;
-      var r=getAccRes(t,null);
+      var eKey=dKey(ed);if(!eKey)return;
+      var r=getCanonicalRes(t);
       var isRunning=!r.outcome||r.outcome.includes("Running");
       var exitDate=null;if(r.exitTimestamp){exitDate=new Date(r.exitTimestamp);if(isNaN(exitDate))exitDate=null}
-      var eKey=dKey(ed);if(!map[eKey])map[eKey]=[];map[eKey].push({type:"entry",trade:t});
+      if(!map[eKey])map[eKey]=[];map[eKey].push({type:"entry",trade:t,id:t.id||"entry-"+Math.random()});
       if(!isRunning&&exitDate){
         var cur=addDays(ed,1);
         while(dKey(cur)!==dKey(exitDate)&&Math.floor((cur-ed)/86400000)<90){var k=dKey(cur);if(!map[k])map[k]=[];map[k].push({type:"running",trade:t});cur=addDays(cur,1)}
@@ -501,15 +855,15 @@ function CalendarView(props){
   function dayCol(evts){
     if(!evts||!evts.length)return null;
     var exits=evts.filter(function(e){return e.type==="exit"});
-    if(exits.length){var w=exits.some(function(e){return parseFloat(getAccRes(e.trade,null).actualPct)>0}),l=exits.some(function(e){return parseFloat(getAccRes(e.trade,null).actualPct)<0});if(w&&!l)return"#34d399";if(l&&!w)return"#ff4444";return"#f0a500"}
+    if(exits.length){var w=exits.some(function(e){return parseFloat(getCanonicalRes(e.trade).actualPct)>0}),l=exits.some(function(e){return parseFloat(getCanonicalRes(e.trade).actualPct)<0});if(w&&!l)return"#34d399";if(l&&!w)return"#ff4444";return"#f0a500"}
     if(evts.some(function(e){return e.type==="entry"}))return"#c8f135";
     if(evts.some(function(e){return e.type==="running"}))return evts.find(function(e){return e.type==="running"}).trade.direction==="BUY"?"rgba(52,211,153,.35)":"rgba(255,68,68,.35)";
     return null;
   }
   var mT=trades.filter(function(t){var d=parseDate(t.timestamp);return d&&d.getFullYear()===year&&d.getMonth()===month});
-  var mCl=mT.filter(function(t){var r=getAccRes(t,null);return r.outcome&&!r.outcome.includes("Running")});
-  var mNet=mCl.reduce(function(s,t){return s+(parseFloat(getAccRes(t,null).actualPct)||0)},0);
-  var mW=mCl.filter(function(t){return getAccRes(t,null).outcome.includes("Win")}).length;
+  var mCl=mT.filter(function(t){var r=getCanonicalRes(t);return r.outcome&&!r.outcome.includes("Running")});
+  var mNet=mCl.reduce(function(s,t){return s+(parseFloat(getCanonicalRes(t).actualPct)||0)},0);
+  var mW=mCl.filter(function(t){return getCanonicalRes(t).outcome.includes("Win")}).length;
   var selKey=selected?dKey(selected):null;
   var selEvts=selKey?(dayMap[selKey]||[]):[];
   return h("div",null,
@@ -537,15 +891,16 @@ function CalendarView(props){
           col&&h("div",{style:{position:"absolute",top:0,left:0,right:0,height:2,background:col,opacity:.9}}),
           h("div",{style:{marginTop:col?3:0,display:"flex",flexDirection:"column",gap:1}},
             h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:isToday?"#c8f135":col?"#ddd":"#444",fontWeight:isToday?"bold":"normal"}},day.getDate()),
-            entryEvts.slice(0,2).map(function(ev,j){return h("div",{key:j,style:{background:"rgba(200,241,53,.12)",borderRadius:2,padding:"0 2px"}},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#c8f135"}},ev.trade.pair))}),
-            exitEvts.slice(0,1).map(function(ev,j){var r=getAccRes(ev.trade,null);return h("div",{key:j,style:{background:r.outcome&&r.outcome.includes("Win")?"rgba(52,211,153,.15)":"rgba(255,68,68,.15)",borderRadius:2,padding:"0 2px"}},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:r.outcome&&r.outcome.includes("Win")?"#34d399":"#ff4444"}},r.actualPct?(parseFloat(r.actualPct)>=0?"+":"")+r.actualPct+"%":"exit"))})
+            entryEvts.slice(0,2).map(function(ev){return h("div",{key:ev.id||ev.trade.id||"entry-"+Math.random(),style:{background:"rgba(200,241,53,.12)",borderRadius:2,padding:"0 2px"}},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#c8f135"}},ev.trade.pair))}),
+            exitEvts.slice(0,1).map(function(ev){var r=getCanonicalRes(ev.trade);return h("div",{key:ev.id||ev.trade.id||"exit-"+Math.random(),style:{background:r.outcome&&r.outcome.includes("Win")?"rgba(52,211,153,.15)":"rgba(255,68,68,.15)",borderRadius:2,padding:"0 2px"}},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:r.outcome&&r.outcome.includes("Win")?"#34d399":"#ff4444"}},r.actualPct?(parseFloat(r.actualPct)>=0?"+":"")+r.actualPct+"%":"exit"))})
           )
         );
       })
     ),
     selected&&selEvts.length>0&&h("div",{style:{marginTop:10,background:"#0d0d0d",border:"1px solid #1a1a1a",borderRadius:9,padding:13}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555",letterSpacing:2,textTransform:"uppercase",marginBottom:9}},selected.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})),
-      selEvts.map(function(ev,i){var t=ev.trade;var r=getAccRes(t,null);return h("div",{key:i,style:{background:"#111",border:"1px solid #1a1a1a",borderRadius:7,padding:10,marginBottom:5,borderLeft:"3px solid "+(ev.type==="entry"?"#c8f135":ev.type==="exit"?(r.outcome&&r.outcome.includes("Win")?"#34d399":"#ff4444"):"#333")}},
+      selEvts.map(function(ev){var t=ev.trade;var r=getCanonicalRes(t);return h("div",{key:(ev.id||t.id||"evt")+"-"+ev.type,style:{background:"#111",border:"1px solid #1a1a1a",borderRadius:7,padding:10,marginBottom:5,borderLeft:"3px solid "+(ev.type==="entry"?"#c8f135":ev.type==="exit"?(r.outcome&&r.outcome.includes("Win")?"#34d399":"#ff4444"):"#333")}},
+
         h("div",{style:{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}},
           h("span",{style:{fontFamily:"'DM Mono',monospace",fontWeight:"bold",color:"white",fontSize:13}},t.pair),
           h(Pill,{label:ev.type.toUpperCase(),col:ev.type==="entry"?"lime":ev.type==="exit"?(r.outcome&&r.outcome.includes("Win")?"green":"red"):"zinc",sm:true}),
@@ -561,7 +916,7 @@ function FirmDetail(props){
   var firm=props.firm,trades=props.trades,firms=props.firms,onBack=props.onBack,onUpdate=props.onUpdate,onDelete=props.onDelete,onUpdateTrade=props.onUpdateTrade,onDeleteTrade=props.onDeleteTrade;
   var tabState=useState("stats");var tab=tabState[0],setTab=tabState[1];
   var editState=useState(false);var editMode=editState[0],setEditMode=editState[1];
-  var efState=useState({name:firm.name,color:firm.color,accountSize:String(firm.accountSize),profitTarget:String(firm.profitTarget),maxDaily:String(firm.maxDaily),maxDrawdown:String(firm.maxDrawdown),phase:firm.phase,commission:String(firm.commission||0),swapRates:Object.assign({},DEFAULT_SWAPS,firm.swapRates||{})});var ef=efState[0],setEf=efState[1];
+  var efState=useState({name:firm.name,color:firm.color,accountSize:String(firm.accountSize),profitTarget:String(firm.profitTarget),maxDaily:String(firm.maxDaily),maxDrawdown:String(firm.maxDrawdown),phase:firm.phase,commission:String(firm.commission||0),swaps:firm.swaps||{}});var ef=efState[0],setEf=efState[1];
   var delState=useState(false);var confirmDel=delState[0],setConfirmDel=delState[1];
   var firmTrades=trades.filter(function(t){return(t.firmIds||[]).includes(firm.id)});
   var s=calcStats(firmTrades,firm.accountSize,firm.id);
@@ -600,29 +955,27 @@ function FirmDetail(props){
         h(Se,{label:"Phase",value:ef.phase,onChange:function(v){setEf(function(p){return Object.assign({},p,{phase:v})})},options:PHASES}),
         h(I,{label:"Commission ($/lot RT)",value:ef.commission,onChange:function(e){setEf(function(p){return Object.assign({},p,{commission:e.target.value})})},placeholder:"e.g. 7"})
       ),
-      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:6,marginTop:4}},"Swap Rates ($/lot/night) — per pair"),
-      h("div",{style:{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:7,padding:10}},
-        h("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr 1fr",gap:"6px 10px",alignItems:"center",marginBottom:4}},
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},"PAIR"),
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#34d399",textAlign:"center"}},"LONG"),
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#ff4444",textAlign:"center"}},"SHORT")
-        ),
-        PAIRS.map(function(pair){
-          var sr=ef.swapRates[pair]||{long:0,short:0};
-          return h("div",{key:pair,style:{display:"grid",gridTemplateColumns:"auto 1fr 1fr",gap:"4px 10px",alignItems:"center",marginBottom:3}},
-            h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#888",minWidth:60}},pair),
-            h("input",{value:sr.long!=null?sr.long:"",onChange:function(e){var v=e.target.value;setEf(function(p){var nr=Object.assign({},p.swapRates);nr[pair]=Object.assign({},nr[pair]||{},{long:v===""?0:parseFloat(v)||0});return Object.assign({},p,{swapRates:nr})})},style:Object.assign({},IS,{padding:"4px 7px",fontSize:11,textAlign:"center"}),placeholder:"0"}),
-            h("input",{value:sr.short!=null?sr.short:"",onChange:function(e){var v=e.target.value;setEf(function(p){var nr=Object.assign({},p.swapRates);nr[pair]=Object.assign({},nr[pair]||{},{short:v===""?0:parseFloat(v)||0});return Object.assign({},p,{swapRates:nr})})},style:Object.assign({},IS,{padding:"4px 7px",fontSize:11,textAlign:"center"}),placeholder:"0"})
-          );
-        })
+      h("div",{style:{marginTop:6}},
+        h("div",{style:LB},"Swap Rates ($/lot/night)"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,marginTop:6}},
+          PAIRS.map(function(pair){
+            var s=ef.swaps&&ef.swaps[pair]?ef.swaps[pair]:{long:"",short:""};
+            return h("div",{key:pair,style:{background:"#111",padding:"8px",borderRadius:6}},
+               h("div",{style:{fontSize:10,color:"#888",marginBottom:4,textAlign:"center"}},pair),
+               h("div",{style:{display:"flex",gap:4}},
+                 h("input",{placeholder:"L",value:s.long,onChange:function(e){var v=e.target.value;setEf(function(p){var ns=Object.assign({},p.swaps);ns[pair]=Object.assign({},ns[pair]||{},{long:v});return Object.assign({},p,{swaps:ns})})},style:Object.assign({},IS,{padding:"4px",fontSize:10,textAlign:"center"})}),
+                 h("input",{placeholder:"S",value:s.short,onChange:function(e){var v=e.target.value;setEf(function(p){var ns=Object.assign({},p.swaps);ns[pair]=Object.assign({},ns[pair]||{},{short:v});return Object.assign({},p,{swaps:ns})})},style:Object.assign({},IS,{padding:"4px",fontSize:10,textAlign:"center"})})
+               )
+            )
+          })
+        )
       ),
-      ),
-      h("div",{style:{display:"flex",alignItems:"center",gap:10}},h("div",{style:LB},"Color"),h("input",{type:"color",value:ef.color,onChange:function(e){setEf(function(p){return Object.assign({},p,{color:e.target.value})})},style:{width:44,height:32,borderRadius:6}})),
+      h("div",{style:{display:"flex",alignItems:"center",gap:10,marginTop:4}},h("div",{style:LB},"Color"),h("input",{type:"color",value:ef.color,onChange:function(e){setEf(function(p){return Object.assign({},p,{color:e.target.value})})},style:{width:44,height:32,borderRadius:6}})),
       h("button",{onClick:saveEdit,style:Object.assign({},BS,{background:"rgba(200,241,53,.09)",border:"1px solid rgba(200,241,53,.2)",color:"#c8f135",padding:"11px"})},"Save Changes")
     ),
     h("div",{style:{background:"#0d0d0d",border:"1px solid "+firm.color+"22",borderTop:"3px solid "+firm.color,borderRadius:9,padding:16,marginBottom:12}},
       h("div",{style:{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:12}},
-        h("div",null,h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:"white"}},firm.name),h("div",{style:{display:"flex",gap:6,marginTop:3,flexWrap:"wrap"}},firm.isPersonal&&h(Pill,{label:"Personal",col:"lime",sm:true}),h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:ph,border:"1px solid "+ph+"44",padding:"1px 7px",borderRadius:3,letterSpacing:2}},firm.phase?firm.phase.toUpperCase():""),h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555"}},"$"+Number(firm.accountSize).toLocaleString()))),
+        h("div",null,h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:"white"}},firm.name),h("div",{style:{display:"flex",gap:6,marginTop:3,flexWrap:"wrap"}},firm.isPersonal&&h(Pill,{label:"Personal",col:"lime",sm:true}),h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:ph,border:"1px solid "+ph+"44",padding:"1px 7px",borderRadius:3,letterSpacing:2}},firm.phase?firm.phase.toUpperCase():""),h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:s.bal>=firm.accountSize?"#34d399":"#ff4444",fontWeight:"bold"}},"$"+s.bal.toLocaleString(undefined,{maximumFractionDigits:2})))),
         h("div",{style:{textAlign:"right"}},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:24,fontWeight:"bold",color:s.np>=0?"#34d399":"#ff4444"}},fmtC(s.np)),h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555"}},fmtP(s.np/firm.accountSize*100)+" net"))
       ),
       h("div",{style:{background:"#090909",borderRadius:8,padding:"9px 9px 4px"}},
@@ -679,7 +1032,7 @@ function FirmsPage(props){
   var viewState=useState("list");var view=viewState[0],setView=viewState[1];
   var selState=useState(null);var selId=selState[0],setSelId=selState[1];
   var ptState=useState("All");var phaseTab=ptState[0],setPhaseTab=ptState[1];
-  var afState=useState({name:"",color:"#3b82f6",accountSize:"100000",profitTarget:"10",maxDaily:"5",maxDrawdown:"10",phase:"Challenge",isPersonal:false,commission:"7",swapRates:Object.assign({},DEFAULT_SWAPS)});var af=afState[0],setAf=afState[1];
+  var afState=useState({name:"",color:"#3b82f6",accountSize:"100000",profitTarget:"10",maxDaily:"5",maxDrawdown:"10",phase:"Challenge",isPersonal:false,commission:"7",swaps:{}});var af=afState[0],setAf=afState[1];
   if(view==="detail"&&selId){var firm2=firms.find(function(f){return f.id===selId});if(firm2)return h(FirmDetail,{firm:firm2,trades:trades,firms:firms,onBack:function(){setView("list")},onUpdate:function(id,d){onUpdate(id,d)},onDelete:function(id){onDelete(id);setView("list")},onUpdateTrade:onUpdateTrade,onDeleteTrade:onDeleteTrade})}
   if(view==="add")return h("div",{className:"fade"},
     h("button",{onClick:function(){setView("list")},style:Object.assign({},BS,{background:"none",border:"1px solid #222",color:"#555",marginBottom:16,padding:"7px 12px"})},"← Back"),
@@ -694,24 +1047,22 @@ function FirmsPage(props){
         !af.isPersonal&&h(I,{label:"Max Drawdown (%)",value:af.maxDrawdown,onChange:function(e){setAf(function(p){return Object.assign({},p,{maxDrawdown:e.target.value})})}}),
         h(I,{label:"Commission ($/lot RT)",value:af.commission,onChange:function(e){setAf(function(p){return Object.assign({},p,{commission:e.target.value})})},placeholder:"e.g. 7"})
       ),
-      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:6,marginTop:4}},"Swap Rates ($/lot/night) — per pair"),
-      h("div",{style:{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:7,padding:10}},
-        h("div",{style:{display:"grid",gridTemplateColumns:"auto 1fr 1fr",gap:"6px 10px",alignItems:"center",marginBottom:4}},
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#444"}},"PAIR"),
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#34d399",textAlign:"center"}},"LONG"),
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,color:"#ff4444",textAlign:"center"}},"SHORT")
-        ),
-        PAIRS.map(function(pair){
-          var sr=af.swapRates[pair]||{long:0,short:0};
-          return h("div",{key:pair,style:{display:"grid",gridTemplateColumns:"auto 1fr 1fr",gap:"4px 10px",alignItems:"center",marginBottom:3}},
-            h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#888",minWidth:60}},pair),
-            h("input",{value:sr.long!=null?sr.long:"",onChange:function(e){var v=e.target.value;setAf(function(p){var nr=Object.assign({},p.swapRates);nr[pair]=Object.assign({},nr[pair]||{},{long:v===""?0:parseFloat(v)||0});return Object.assign({},p,{swapRates:nr})})},style:Object.assign({},IS,{padding:"4px 7px",fontSize:11,textAlign:"center"}),placeholder:"0"}),
-            h("input",{value:sr.short!=null?sr.short:"",onChange:function(e){var v=e.target.value;setAf(function(p){var nr=Object.assign({},p.swapRates);nr[pair]=Object.assign({},nr[pair]||{},{short:v===""?0:parseFloat(v)||0});return Object.assign({},p,{swapRates:nr})})},style:Object.assign({},IS,{padding:"4px 7px",fontSize:11,textAlign:"center"}),placeholder:"0"})
-          );
-        })
+      h("div",{style:{marginTop:6}},
+        h("div",{style:LB},"Swap Rates ($/lot/night)"),
+        h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:8,marginTop:6}},
+          PAIRS.map(function(pair){
+            var s=af.swaps&&af.swaps[pair]?af.swaps[pair]:{long:"",short:""};
+            return h("div",{key:pair,style:{background:"#111",padding:"8px",borderRadius:6}},
+               h("div",{style:{fontSize:10,color:"#888",marginBottom:4,textAlign:"center"}},pair),
+               h("div",{style:{display:"flex",gap:4}},
+                 h("input",{placeholder:"L",value:s.long,onChange:function(e){var v=e.target.value;setAf(function(p){var ns=Object.assign({},p.swaps);ns[pair]=Object.assign({},ns[pair]||{},{long:v});return Object.assign({},p,{swaps:ns})})},style:Object.assign({},IS,{padding:"4px",fontSize:10,textAlign:"center"})}),
+                 h("input",{placeholder:"S",value:s.short,onChange:function(e){var v=e.target.value;setAf(function(p){var ns=Object.assign({},p.swaps);ns[pair]=Object.assign({},ns[pair]||{},{short:v});return Object.assign({},p,{swaps:ns})})},style:Object.assign({},IS,{padding:"4px",fontSize:10,textAlign:"center"})})
+               )
+            )
+          })
+        )
       ),
-      ),
-      h("div",{style:{display:"flex",alignItems:"center",gap:10}},h("div",{style:LB},"Color"),h("input",{type:"color",value:af.color,onChange:function(e){setAf(function(p){return Object.assign({},p,{color:e.target.value})})},style:{width:44,height:32,borderRadius:6}})),
+      h("div",{style:{display:"flex",alignItems:"center",gap:10,marginTop:4}},h("div",{style:LB},"Color"),h("input",{type:"color",value:af.color,onChange:function(e){setAf(function(p){return Object.assign({},p,{color:e.target.value})})},style:{width:44,height:32,borderRadius:6}})),
       h("button",{onClick:function(){if(!af.name)return;onAdd(Object.assign({},af,{accountSize:parseFloat(af.accountSize),profitTarget:parseFloat(af.profitTarget)||0,maxDaily:parseFloat(af.maxDaily)||0,maxDrawdown:parseFloat(af.maxDrawdown)||0,commission:parseFloat(af.commission)||0,id:Date.now()}));setView("list")},style:Object.assign({},BS,{background:"rgba(200,241,53,.09)",border:"1px solid rgba(200,241,53,.2)",color:"#c8f135",padding:"12px"})},"Add Account")
     )
   );
@@ -740,10 +1091,10 @@ function FirmsPage(props){
             h("span",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:"white"}},f.name),
             f.isPersonal&&h(Pill,{label:"Personal",col:"lime",sm:true}),
             h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:fpC[f.phase]||"#888",border:"1px solid "+(fpC[f.phase]||"#888")+"44",padding:"1px 6px",borderRadius:3,letterSpacing:2}},f.phase?f.phase.toUpperCase():""),
-            h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#444"}},"$"+Number(f.accountSize).toLocaleString())
+            h("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:st.bal>=f.accountSize?"#34d399":"#ff4444",fontWeight:"bold"}},"$"+st.bal.toLocaleString(undefined,{maximumFractionDigits:2}))
           ),
           f.profitTarget>0&&h("div",{style:{height:3,background:"#1a1a1a",borderRadius:2,overflow:"hidden",maxWidth:240,marginBottom:3}},h("div",{style:{height:"100%",width:Math.min(100,Math.max(0,pct2/f.profitTarget*100))+"%",background:f.color,borderRadius:2}})),
-          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555"}},ft.length+" trades · "+fmtP(pct2)+" · "+fmtC(st.np)+" · Bal: ",h("span",{style:{color:st.bal>f.accountSize?"#34d399":st.bal<f.accountSize?"#ff4444":"#888",fontWeight:"bold"}},"$"+st.bal.toLocaleString(undefined,{maximumFractionDigits:0})))
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555"}},ft.length+" trades · "+fmtP(pct2)+" · "+fmtC(st.np))
         ),
         h("div",{style:{textAlign:"right"}},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:18,fontWeight:"bold",color:st.np>=0?"#34d399":"#ff4444"}},fmtC(st.np))),
         h("span",{style:{color:"#333",fontSize:13}},"›")
@@ -755,13 +1106,13 @@ function FirmsPage(props){
 // ── NEW TRADE FORM ──
 function NewTradeForm(props){
   var onSave=props.onSave,onCancel=props.onCancel,firms=props.firms,trades=props.trades||[];
-  var blank={pair:"",direction:"",session:"",marketRegime:"",entry:"",sl:"",tp:"",lots:"",riskPct:"1",accountSize:"100000",firmIds:[],c1:false,c2:false,c3:false,c4:false,c5:false,c6:false,c7:false,c8:false,newsPresent:"no",newsType:"",newsAction:"",beforeNotes:"",photoBefore:""};
+  var blank={timestamp:"",setupType:"",confidence:"",pair:"",direction:"",session:"",marketRegime:"",entry:"",sl:"",tp:"",lots:"",riskPct:"1",accountSize:"100000",firmIds:[],c1:false,c2:false,c3:false,c4:false,c5:false,c6:false,c7:false,c8:false,newsPresent:"no",newsType:"",newsAction:"",beforeNotes:"",photoBefore:""};
   var fState=useState(blank);var f=fState[0],setF=fState[1];
   var sv=function(k){return function(v){setF(function(p){return Object.assign({},p,{[k]:v})})}};
   var se=function(k){return function(e){setF(function(p){return Object.assign({},p,{[k]:e.target.value})})}};
   var rr=calcRR(f.entry,f.sl,f.tp,f.direction);
   var score=scoreEntry(f);
-  // auto-lot: if accounts assigned use first assigned account's current balance, else use manual accountSize
+
   useEffect(function(){
     var bal=f.firmIds.length>0
       ?(function(){var firm2=firms.find(function(x){return x.id===f.firmIds[0]});return firm2?currentBal(firm2):parseFloat(f.accountSize)||100000})()
@@ -769,20 +1120,22 @@ function NewTradeForm(props){
     var l=calcLots(f.pair,f.entry,f.sl,f.riskPct,bal);
     if(l)setF(function(p){return Object.assign({},p,{lots:String(l)})});
   },[f.pair,f.entry,f.sl,f.riskPct,f.accountSize,f.firmIds]);
-  // compute current balance per firm (starting size + all closed PnL)
+
   function currentBal(firm2){
     var ft=trades.filter(function(t){return(t.firmIds||[]).includes(firm2.id)});
     return calcStats(ft,firm2.accountSize,firm2.id).bal;
   }
   function selectFirm(firmId){var firm2=firms.find(function(x){return String(x.id)===firmId});if(!firm2)return;var bal=currentBal(firm2);setF(function(p){return Object.assign({},p,{accountSize:String(Math.round(bal*100)/100),firmIds:p.firmIds.includes(firm2.id)?p.firmIds:[].concat(p.firmIds,[firm2.id])})})}
   function toggleFirm(id){setF(function(p){return Object.assign({},p,{firmIds:p.firmIds.includes(id)?p.firmIds.filter(function(x){return x!==id}):[].concat(p.firmIds,[id])})})}
-  function handleSave(){if(!f.pair||!f.direction||!f.entry||!f.sl){alert("Fill pair, direction, entry and SL.");return}if(score<5&&!window.confirm("Score "+score+"/8 — below rules. Log anyway?"))return;onSave(Object.assign({},f,{rr:rr,id:Date.now(),timestamp:nowTs(),accountResults:{}}))}
+  function handleSave(){if(!f.pair||!f.direction||!f.entry||!f.sl){alert("Fill pair, direction, entry and SL.");return}if(!f.timestamp){alert("Please enter a trade date & time.");return}if(score<5&&!window.confirm("Score "+score+"/8 — below rules. Log anyway?"))return;onSave(Object.assign({},f,{rr:rr,id:Date.now(),timestamp:f.timestamp,accountResults:{}}))}
+
   var C={lime:"#c8f135",sky:"#38bdf8",emerald:"#34d399",amber:"#f0a500",violet:"#a78bfa"};
   return h("div",{style:{display:"flex",flexDirection:"column",gap:15,paddingBottom:40},className:"fade"},
-    h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#444",letterSpacing:3,textTransform:"uppercase"}},"// Timestamp auto-set · v11 per-account outcomes"),
     h("div",{style:{borderLeft:"2px solid "+C.lime,paddingLeft:12,display:"flex",flexDirection:"column",gap:8}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:C.lime,textTransform:"uppercase"}},"01 — Setup"),
       h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+        h(F,{label:"Trade Date & Time"},h("input",{type:"datetime-local",value:f.timestamp,onChange:se("timestamp"),style:Object.assign({},IS,{colorScheme:"dark"})})),
+        h(Se,{label:"Setup Type",value:f.setupType,onChange:sv("setupType"),options:SETUP_TYPES}),
         h(Se,{label:"Pair",value:f.pair,onChange:sv("pair"),options:PAIRS}),
         h(F,{label:"Direction"},h("div",{style:{display:"flex",gap:7,height:38}},["BUY","SELL"].map(function(d){return h("button",{key:d,onClick:function(){setF(function(p){return Object.assign({},p,{direction:d})})},style:{flex:1,border:"1px solid "+(f.direction===d?(d==="BUY"?"rgba(52,211,153,.4)":"rgba(255,68,68,.4)"):"#1e1e1e"),background:f.direction===d?(d==="BUY"?"rgba(52,211,153,.09)":"rgba(255,68,68,.09)"):"#111",color:f.direction===d?(d==="BUY"?"#34d399":"#ff4444"):"#555",borderRadius:6,cursor:"pointer",fontFamily:"'DM Mono',monospace",fontSize:11,letterSpacing:2,textTransform:"uppercase"}},d)}))),
         h(Se,{label:"Session",value:f.session,onChange:sv("session"),options:SESSIONS}),
@@ -792,12 +1145,13 @@ function NewTradeForm(props){
     ),
     h("div",{style:{borderLeft:"2px solid "+C.sky,paddingLeft:12,display:"flex",flexDirection:"column",gap:8}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:C.sky,textTransform:"uppercase"}},"02 — Levels & Size"),
-      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}},
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}},
         h(I,{label:"Entry",value:f.entry,onChange:se("entry"),placeholder:"156.749"}),
         h(I,{label:"Stop Loss",value:f.sl,onChange:se("sl"),placeholder:"156.259"}),
         h(I,{label:"Take Profit",value:f.tp,onChange:se("tp"),placeholder:"159.327"}),
         h(I,{label:"Risk %",value:f.riskPct,onChange:se("riskPct"),placeholder:"1"}),
         h(F,{label:"R:R (auto)"},h("div",{style:Object.assign({},IS,{color:rr?rrC(rr):"#444",background:"#0a0a0a",display:"flex",alignItems:"center"})},rr?rr+"R":"–")),
+        h(Se,{label:"Confidence",value:f.confidence,onChange:sv("confidence"),options:["1","2","3","4","5"]}),
         h(I,{label:"Lots (auto)",value:f.lots,onChange:se("lots")})
       ),
       h(F,{label:"Account for lot calc"},
@@ -805,10 +1159,7 @@ function NewTradeForm(props){
         h("input",{value:f.accountSize,onChange:se("accountSize"),placeholder:"Or type custom e.g. 50000",style:Object.assign({},IS,{fontSize:12,marginTop:5})})
       ),
       h(LotCalc,{pair:f.pair,entry:f.entry,sl:f.sl,riskPct:f.riskPct,firmIds:f.firmIds,
-        firms:firms.map(function(firm2){
-          // always use live current balance, not stored starting size
-          return Object.assign({},firm2,{accountSize:currentBal(firm2)});
-        })
+        firms:firms.map(function(firm2){return Object.assign({},firm2,{accountSize:currentBal(firm2)});})
       })
     ),
     h("div",{style:{borderLeft:"2px solid "+C.violet,paddingLeft:12,display:"flex",flexDirection:"column",gap:8}},
@@ -843,12 +1194,49 @@ function NewTradeForm(props){
 }
 
 // ── FOREX NEWS ──
+var NEWS_TZ_OPTIONS=[
+  {label:"Local (Device)",value:"local"},
+  {label:"New York (ET)",value:"America/New_York"},
+  {label:"London (GMT/BST)",value:"Europe/London"},
+  {label:"Frankfurt (CET)",value:"Europe/Berlin"},
+  {label:"Dubai (GST)",value:"Asia/Dubai"},
+  {label:"Mumbai (IST)",value:"Asia/Kolkata"},
+  {label:"Tokyo (JST)",value:"Asia/Tokyo"},
+  {label:"Sydney (AEDT)",value:"Australia/Sydney"},
+  {label:"UTC",value:"UTC"}
+];
 function ForexNews(){
   var evState=useState([]);var events=evState[0],setEvents=evState[1];
   var ldState=useState(true);var loading=ldState[0],setLoading=ldState[1];
   var erState=useState(null);var err=erState[0],setErr=erState[1];
   var flState=useState("high");var filter=flState[0],setFilter=flState[1];
-  function load(){setLoading(true);setErr(null);var FF="https://nfs.faireconomy.media/ff_calendar_thisweek.json";fetch(FF,{cache:"no-store"}).catch(function(){return fetch("https://corsproxy.io/?url="+encodeURIComponent(FF),{cache:"no-store"})}).then(function(r){return r.json()}).then(function(data){setEvents([].concat(data).sort(function(a,b){return new Date(a.date)-new Date(b.date)}));setLoading(false)}).catch(function(){setErr("Could not load. Tap retry.");setLoading(false)})}
+  var tzState=useState("local");var selTz=tzState[0],setSelTz=tzState[1];
+  function fmtEvTime(dateStr){
+    if(!dateStr)return"";
+    var d=new Date(dateStr);
+    var opts={hour:"2-digit",minute:"2-digit",hour12:false};
+    if(selTz!=="local")opts.timeZone=selTz;
+    return d.toLocaleTimeString("en-GB",opts);
+  }
+  function load(){
+    setLoading(true);setErr(null);
+    var FF="https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+    var P1="https://corsproxy.io/?url="+encodeURIComponent(FF);
+    var P2="https://api.allorigins.win/get?url="+encodeURIComponent(FF);
+    function tryFetch(url,isAO){
+      return fetch(url,{cache:"no-store"})
+        .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+        .then(function(data){
+          var arr=isAO?(function(){try{return JSON.parse(data.contents);}catch(e){throw new Error("parse error");}}()):data;
+          return [].concat(arr).sort(function(a,b){return new Date(a.date)-new Date(b.date);});
+        });
+    }
+    tryFetch(FF,false)
+      .catch(function(){return tryFetch(P1,false);})
+      .catch(function(){return tryFetch(P2,true);})
+      .then(function(sorted){setEvents(sorted);setLoading(false);})
+      .catch(function(e){setErr("Could not load ("+e.message+"). Tap retry.");setLoading(false);});
+  }
   useEffect(function(){load()},[]);
   var iC={High:"#ff4444",Medium:"#f0a500",Low:"#555",Holiday:"#333"};
   var filtered=events.filter(function(e){return filter==="high"?e.impact==="High":filter==="medium"?["High","Medium"].includes(e.impact):true});
@@ -857,7 +1245,12 @@ function ForexNews(){
   return h("div",{className:"fade"},
     h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}},
       h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,color:"white"}},"Economic Calendar"),
-      h("div",{style:{display:"flex",gap:5}},[["high","High Only"],["medium","Med+High"],["all","All"]].map(function(vl){return h("button",{key:vl[0],onClick:function(){setFilter(vl[0])},style:Object.assign({},BS,{padding:"6px 10px",fontSize:9,background:filter===vl[0]?"#1a1a1a":"none",border:"1px solid "+(filter===vl[0]?"#2a2a2a":"#141414"),color:filter===vl[0]?"white":"#555"})},vl[1])}))
+      h("div",{style:{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}},
+        h("select",{value:selTz,onChange:function(e){setSelTz(e.target.value)},style:Object.assign({},IS,{fontSize:10,padding:"5px 8px",height:28})},
+          NEWS_TZ_OPTIONS.map(function(opt){return h("option",{key:opt.value,value:opt.value},opt.label)})
+        ),
+        h("div",{style:{display:"flex",gap:5}},[["high","High Only"],["medium","Med+High"],["all","All"]].map(function(vl){return h("button",{key:vl[0],onClick:function(){setFilter(vl[0])},style:Object.assign({},BS,{padding:"6px 10px",fontSize:9,background:filter===vl[0]?"#1a1a1a":"none",border:"1px solid "+(filter===vl[0]?"#2a2a2a":"#141414"),color:filter===vl[0]?"white":"#555"})},vl[1])}))
+      )
     ),
     loading&&h("div",{style:{textAlign:"center",padding:"40px 0",fontFamily:"'DM Mono',monospace",fontSize:12,color:"#333"}},"Loading..."),
     err&&h("div",{style:{background:"rgba(255,68,68,.05)",border:"1px solid rgba(255,68,68,.15)",borderRadius:7,padding:12,fontFamily:"'DM Mono',monospace",fontSize:12,color:"#ff8888",display:"flex",gap:10,alignItems:"center",justifyContent:"space-between"}},h("span",null,err),h("button",{onClick:load,style:Object.assign({},BS,{padding:"5px 10px",fontSize:9,background:"rgba(56,189,248,.1)",border:"1px solid rgba(56,189,248,.2)",color:"#38bdf8"})},"Retry")),
@@ -871,7 +1264,7 @@ function ForexNews(){
           h("div",{style:{flex:1,height:1,background:"#151515"}})
         ),
         grouped[dateStr].map(function(ev,i){
-          var evTime=ev.date?new Date(ev.date).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false}):"";
+          var evTime=fmtEvTime(ev.date);
           var isPast=new Date(ev.date)<new Date();
           return h("div",{key:i,style:{border:"1px solid "+(ev.impact==="High"?"rgba(255,68,68,.12)":"#141414"),borderLeft:"3px solid "+(iC[ev.impact]||"#333"),borderRadius:6,padding:"10px 12px",marginBottom:5,opacity:isPast?.5:1,background:isPast?"#0a0a0a":"transparent"}},
             h("div",{style:{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}},
@@ -952,7 +1345,7 @@ function CloudSetup(props){
   return h("div",{style:{minHeight:"100vh",background:"#070707",display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
     h("div",{style:{maxWidth:500,width:"100%"}},
       h("div",{style:{textAlign:"center",marginBottom:24}},
-        h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#c8f135",letterSpacing:4,textTransform:"uppercase",marginBottom:6}},"NBS Journal v11"),
+        h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#c8f135",letterSpacing:4,textTransform:"uppercase",marginBottom:6}},"NBS Journal v12"),
         h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:34,color:"white",marginBottom:8}},"Cloud Sync"),
         h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,color:"#555",lineHeight:1.8}},"Free GitHub gist. Private. Only you.")
       ),
@@ -980,10 +1373,10 @@ function CloudSetup(props){
 // ── STATS BAR ──
 function StatsBar(props){
   var trades=props.trades;
-  var cl=trades.filter(function(t){var r=getAccRes(t,null);return r.outcome&&!r.outcome.includes("Running")});
-  var wins=cl.filter(function(t){return getAccRes(t,null).outcome.includes("Win")}).length;
+  var cl=trades.filter(function(t){var r=getCanonicalRes(t);return r.outcome&&!r.outcome.includes("Running")});
+  var wins=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0}).length;
   var wr=cl.length?Math.round(wins/cl.length*100)+"%":"–";
-  var net=cl.reduce(function(s,t){return s+(parseFloat(getAccRes(t,null).actualPct)||0)},0);
+  var net=cl.reduce(function(s,t){return s+(parseFloat(getCanonicalRes(t).actualPct)||0)},0);
   var avg=cl.length?(net/cl.length).toFixed(2):null;
   return h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:5,marginBottom:14}},
     [[String(trades.length),"Trades","#e0e0e0"],[wr,"Win Rate",cl.length&&wins/cl.length>=0.4?"#34d399":"#ff4444"],[(net?(net>=0?"+":"")+net.toFixed(2)+"%":"–"),"Net P&L",net>=0?"#34d399":"#ff4444"],[(avg?(parseFloat(avg)>=0?"+":"")+avg+"%":"–"),"Avg/Trade","#38bdf8"]].map(function(vlc){
@@ -992,6 +1385,908 @@ function StatsBar(props){
         h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#3a3a3a",letterSpacing:2,textTransform:"uppercase",marginTop:2}},vlc[1])
       );
     })
+  );
+}
+
+
+// ── REPORTS ──
+// ── REACT COMPONENTS ──
+// ADD BEFORE function App() IN REACT SCRIPT
+function PdfPreviewModal(props){
+  var ref=useRef(null);
+  function dl(){
+    if(!ref.current)return;
+    html2pdf().set({
+      margin:0.5,
+      filename:props.filename||"report.pdf",
+      image:{type:"jpeg",quality:0.98},
+      html2canvas:{scale:2,useCORS:true},
+      jsPDF:{unit:"in",format:"a4",orientation:"portrait"}
+    }).from(ref.current).save();
+  }
+  return h("div",{className:"preview-modal"},
+    h("div",{style:{width:"100%",maxWidth:920,display:"flex",justifyContent:"space-between",marginBottom:10}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#aaa"}},props.title),
+      h("div",{style:{display:"flex",gap:8}},
+        h("button",{onClick:dl,style:Object.assign({},BS,{background:"rgba(200,241,53,.1)",border:"1px solid rgba(200,241,53,.3)",color:"#c8f135",padding:"6px 12px"})},"Download PDF"),
+        h("button",{onClick:props.onClose,style:Object.assign({},BS,{background:"none",border:"1px solid #333",color:"#888",padding:"6px 12px"})},"Close")
+      )
+    ),
+    h("div",{className:"preview-content"},h("div",{ref:ref,className:"pdf-export-wrapper"},props.children))
+  );
+}
+
+function ReportsPage(props){
+  var trades=props.trades||[];
+  var firms=props.firms||[];
+  var tabState=useState("factsheet");var tab=tabState[0],setTab=tabState[1];
+  var accState=useState("all");var selAccId=accState[0],setSelAccId=accState[1];
+  var selFirm=selAccId!=="all"?firms.find(function(f){return String(f.id)===selAccId}):null;
+  var firmId=selFirm?selFirm.id:null;
+  var acctSize=selFirm?selFirm.accountSize:null;
+  return h("div",{className:"fade"},
+    h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}},
+      h("div",{style:Object.assign({},LB,{marginRight:4})},"Account"),
+      h("select",{value:selAccId,onChange:function(e){setSelAccId(e.target.value);},style:Object.assign({},IS,{width:"auto",minWidth:200,fontSize:11})},
+        h("option",{value:"all"},"All / Fund View"),
+        firms.map(function(f){return h("option",{key:f.id,value:String(f.id)},f.name);})
+      ),
+      selFirm&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:selFirm.color}},selFirm.name)
+    ),
+    h("div",{style:{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}},
+      [["factsheet","Monthly Factsheet"],["letter","Investor Letter"],["risk","Quarterly Risk"],["accrpt","Account Reports"]].map(function(x){
+        return h("button",{key:x[0],onClick:function(){setTab(x[0])},style:Object.assign({},BS,{padding:"7px 13px",fontSize:10,background:tab===x[0]?"#171717":"none",border:"1px solid "+(tab===x[0]?"#252525":"#131313"),color:tab===x[0]?"white":"#666"})},x[1]);
+      })
+    ),
+    tab==="factsheet"&&h(ReportsFactsheet,{trades:trades,firmId:firmId,acctSize:acctSize,selFirm:selFirm}),
+    tab==="letter"&&h(ReportsLetter,{trades:trades,firmId:firmId,acctSize:acctSize,selFirm:selFirm}),
+    tab==="risk"&&h(ReportsRisk,{trades:trades,firmId:firmId,acctSize:acctSize,selFirm:selFirm}),
+    tab==="accrpt"&&h(AccountReportsPage,{trades:trades,firms:firms})
+  );
+}
+
+function ReportsFactsheet(props){
+  var trades=props.trades||[],firmId=props.firmId||null,acctSize=props.acctSize||null,selFirm=props.selFirm||null;
+  var mm=firmId!=null?rpt_monthMapForAccount(trades,firmId,acctSize):rpt_monthMap(trades),mkeys=rpt_orderedKeys(mm);
+  var init=mkeys.length?mkeys[mkeys.length-1]:(new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0"));
+  var selState=useState(init);var sel=selState[0],setSel=selState[1];
+  var saved=(REPORTS_LS.read().factsheet)||{
+    fundName:"NBS Master Fund",aum:"25,000,000",manager:"Your Name",email:"investor-relations@example.com",
+    strategy:"NBS Master Fund seeks to capture medium-term dislocations across FX and macro assets through a disciplined, rules-based process.",
+    fees:{mgmt:"2% (payable in advance annually)",perf:"20% (HWM)",lockup:"1 year (Class A) / 2 years (Class B)",redemptions:"Quarterly (60-day notice)",dists:"Quarterly / Semi-Annual / Annual / Reinvest",domicile:"Singapore VCC"}
+  };
+  var fsState=useState(saved);var f=fsState[0],setF=fsState[1];
+  var pvState=useState(false);var pv=pvState[0],setPv=pvState[1];
+  function sv(n){var d=REPORTS_LS.read()||{};d.factsheet=n;REPORTS_LS.write(d);}
+  function ch(k){return function(e){var n=Object.assign({},f);n[k]=e.target.value;setF(n);sv(n);};}
+  function chf(k){return function(e){var n=Object.assign({},f,{fees:Object.assign({},f.fees)});n.fees[k]=e.target.value;setF(n);sv(n);};}
+
+  var monthRet=mm[sel]?mm[sel].ret:0;
+  var ytd=rpt_ytd(mm,sel),inc=rpt_cumFromMonthMap(mm,sel),ann=rpt_annFromMonthMap(mm),dd=rpt_maxDDFromMonthMap(mm);
+  var arr=rpt_monthArr(mm),ss=rpt_sharpeSortino(arr),calmar=dd?ann/dd:0;
+  var st=rpt_monthStats(mm);
+  var selTrades=rpt_closedTradesForAccount(rpt_tradesForMonth(trades,sel),firmId);
+  var winRate=selTrades.length?Math.round(selTrades.filter(function(t){var r=firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);return parseFloat(r.actualPct)>0;}).length/selTrades.length*100):0;
+
+  function ym(k){var p=k.split("-");return new Date(parseInt(p[0],10),parseInt(p[1],10)-1,1).toLocaleString("en-GB",{month:"short",year:"numeric"});}
+  var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  return h("div",null,
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
+      h("div",null,
+        h(I,{label:selFirm?"Account Name":"Fund Name",value:selFirm?selFirm.name:f.fundName,onChange:selFirm?function(){}:ch("fundName")}),
+        selFirm
+          ?h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#aaa",padding:"9px 12px",background:"#111",border:"1px solid #1e1e1e",borderRadius:6,marginTop:6}},selFirm.name+" — $"+Number(selFirm.accountSize).toLocaleString()+" "+selFirm.phase)
+          :h(I,{label:"AUM",value:f.aum,onChange:ch("aum")}),
+        h(I,{label:"Fund Manager Name",value:f.manager,onChange:ch("manager")}),
+        h(I,{label:"Contact Email",value:f.email,onChange:ch("email")})
+      ),
+      h("div",null,
+        h(Se,{label:"Month/Year",value:sel,onChange:setSel,options:mkeys}),
+        h(TA,{label:"Strategy Description",rows:5,value:f.strategy,onChange:ch("strategy")})
+      )
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10}},
+      h(StatTile,{label:"Month Return",value:(monthRet>=0?"+":"")+monthRet.toFixed(2)+"%",col:monthRet>=0?"#34d399":"#ff4444"}),
+      h(StatTile,{label:"YTD",value:(ytd>=0?"+":"")+ytd.toFixed(2)+"%",col:ytd>=0?"#34d399":"#ff4444"}),
+      h(StatTile,{label:"Since Inception",value:(inc>=0?"+":"")+inc.toFixed(2)+"%",col:inc>=0?"#34d399":"#ff4444"}),
+      h(StatTile,{label:"Win Rate",value:(winRate||0)+"%"})
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10}},
+      h(StatTile,{label:"Sharpe",value:ss.sharpe.toFixed(2)}),
+      h(StatTile,{label:"Sortino",value:ss.sortino.toFixed(2)}),
+      h(StatTile,{label:"Calmar",value:calmar.toFixed(2)}),
+      h(StatTile,{label:"Max DD",value:dd.toFixed(2)+"%"})
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:10}},
+      h(I,{label:"Management Fee",value:f.fees.mgmt,onChange:chf("mgmt")}),
+      h(I,{label:"Performance Fee",value:f.fees.perf,onChange:chf("perf")}),
+      h(I,{label:"Lock-Up",value:f.fees.lockup,onChange:chf("lockup")}),
+      h(I,{label:"Redemptions",value:f.fees.redemptions,onChange:chf("redemptions")}),
+      h(I,{label:"Distributions",value:f.fees.dists,onChange:chf("dists")}),
+      h(I,{label:"Domicile",value:f.fees.domicile,onChange:chf("domicile")})
+    ),
+    h("div",{style:{overflowX:"auto",marginBottom:10}},
+      h("table",{style:{width:"100%",borderCollapse:"collapse",fontFamily:"'DM Mono',monospace",fontSize:10,minWidth:650}},
+        h("thead",null,h("tr",null,h("th",null,"Year"),months.map(function(m){return h("th",{key:m},m)}),h("th",null,"YTD"))),
+        h("tbody",null,[2026,2027,2028,2029,2030].map(function(y){
+          var eq=1,rowYtd=null;
+          return h("tr",{key:y},
+            h("td",null,String(y)),
+            months.map(function(_,i){
+              var k=y+"-"+String(i+1).padStart(2,"0"),v=mm[k]?mm[k].ret:null;
+              if(v!=null){eq*=(1+v/100);rowYtd=(eq-1)*100;}
+              return h("td",{key:k,style:{border:k===sel?"1px solid #C9A84C":"1px solid #1e1e1e",background:v==null?"#fff":(v>=0?"#E6F4EA":"#FDECEC"),color:v==null?"#666":(v>=0?"#1B7A3D":"#B22222"),cursor:v==null?"default":"pointer"},onClick:function(){if(v!=null)setSel(k);}},v==null?"–":v.toFixed(1)+"%");
+            }),
+            h("td",null,rowYtd==null?"–":rowYtd.toFixed(1)+"%")
+          );
+        }))
+      )
+    ),
+    h("button",{onClick:function(){setPv(true);},style:Object.assign({},BS,{background:"#c8f135",border:"none",color:"#000"})},"Preview Factsheet PDF"),
+
+    pv&&h(PdfPreviewModal,{title:"Monthly Factsheet",filename:(f.fundName||"fund")+"_factsheet_"+sel+".pdf",onClose:function(){setPv(false);}},
+      h("div",{className:"pdf-header"},f.fundName),
+      h("div",{className:"snapshot-grid"},
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"MONTH RETURN"),h("div",{className:"snapshot-val",style:{color:monthRet>=0?"#1B7A3D":"#B22222"}},(monthRet>=0?"+":"")+monthRet.toFixed(2)+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"YTD"),h("div",{className:"snapshot-val",style:{color:ytd>=0?"#1B7A3D":"#B22222"}},(ytd>=0?"+":"")+ytd.toFixed(2)+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"INCEPTION"),h("div",{className:"snapshot-val",style:{color:inc>=0?"#1B7A3D":"#B22222"}},(inc>=0?"+":"")+inc.toFixed(2)+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"SHARPE"),h("div",{className:"snapshot-val text-navy"},ss.sharpe.toFixed(2))),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"MAX DD"),h("div",{className:"snapshot-val text-red"},dd.toFixed(2)+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"AUM"),h("div",{className:"snapshot-val text-navy"},"$"+f.aum))
+      ),
+      h("div",{className:"pdf-section-title"},"Monthly Returns Grid"),
+      h("table",null,
+        h("thead",null,h("tr",null,h("th",null,"Month"),h("th",null,"Return %"))),
+        h("tbody",null,mkeys.slice(-24).map(function(k){var v=mm[k].ret||0;return h("tr",{key:k},h("td",null,ym(k)),h("td",{className:v>=0?"text-green":"text-red"},(v>=0?"+":"")+v.toFixed(2)+"%"));}))
+      ),
+      h("div",{className:"pdf-section-title"},"Key Statistics"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Annualized Return"),h("td",{className:"text-navy"},ann.toFixed(2)+"%")),
+        h("tr",null,h("td",null,"Sortino Ratio"),h("td",{className:"text-navy"},ss.sortino.toFixed(2))),
+        h("tr",null,h("td",null,"Calmar Ratio"),h("td",{className:"text-navy"},calmar.toFixed(2))),
+        h("tr",null,h("td",null,"Best Month"),h("td",{className:"text-navy"},st.best?ym(st.best.k)+" ("+st.best.v.toFixed(2)+"%)":"–")),
+        h("tr",null,h("td",null,"Worst Month"),h("td",{className:"text-navy"},st.worst?ym(st.worst.k)+" ("+st.worst.v.toFixed(2)+"%)":"–")),
+        h("tr",null,h("td",null,"% Positive Months"),h("td",{className:"text-navy"},st.posPct.toFixed(1)+"%"))
+      )),
+      h("div",{className:"pdf-section-title"},"Strategy Description"),
+      h("p",null,f.strategy),
+      h("div",{className:"pdf-section-title"},"Fund Information"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Management Fee"),h("td",null,f.fees.mgmt)),
+        h("tr",null,h("td",null,"Performance Fee"),h("td",null,f.fees.perf)),
+        h("tr",null,h("td",null,"Lock-Up"),h("td",null,f.fees.lockup)),
+        h("tr",null,h("td",null,"Redemptions"),h("td",null,f.fees.redemptions)),
+        h("tr",null,h("td",null,"Distributions"),h("td",null,f.fees.dists)),
+        h("tr",null,h("td",null,"Domicile"),h("td",null,f.fees.domicile))
+      )),
+      h("p",null,"Fund Manager: "+f.manager+" | Contact: "+f.email),
+      h("div",{className:"pdf-footer"},"CONFIDENTIAL — For qualified investors only. Past performance is not indicative of future results.")
+    )
+  );
+}
+
+function ReportsLetter(props){
+  var trades=props.trades||[],firmId=props.firmId||null,acctSize=props.acctSize||null,selFirm=props.selFirm||null;
+  var mm=firmId!=null?rpt_monthMapForAccount(trades,firmId,acctSize):rpt_monthMap(trades),keys=rpt_orderedKeys(mm);
+  var init=keys.length?keys[keys.length-1]:(new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0"));
+  var selState=useState(init);var sel=selState[0],setSel=selState[1];
+  var saved=(REPORTS_LS.read().letter)||{fundName:"NBS Master Fund",manager:"Your Name",commentary:"",activity:"",outlook:""};
+  var sState=useState(saved);var f=sState[0],setF=sState[1];
+  var pState=useState(false);var pv=pState[0],setPv=pState[1];
+  function sv(n){var d=REPORTS_LS.read()||{};d.letter=n;REPORTS_LS.write(d);}
+  function ch(k){return function(e){var n=Object.assign({},f);n[k]=e.target.value;setF(n);sv(n);};}
+  function getR(t){return firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);}
+  var mTrades=rpt_tradesForMonth(trades,sel),closed=rpt_closedTradesForAccount(mTrades,firmId);
+  var monthRet=closed.reduce(function(a,t){return a+(parseFloat(getR(t).actualPct)||0);},0);
+  var ytd=rpt_ytd(mm,sel),inc=rpt_cumFromMonthMap(mm,sel),dd=rpt_maxDDFromMonthMap(mm);
+  var wins=closed.filter(function(t){return parseFloat(getR(t).actualPct)>0;}).length;
+  var wr=closed.length?Math.round(wins/closed.length*100):0;
+  var openCount=mTrades.filter(function(t){var r=getR(t);return !r.outcome||r.outcome.includes("Running");}).length;
+  var totalAttr=closed.reduce(function(a,t){return a+(parseFloat(getR(t).actualPct)||0);},0);
+
+  return h("div",null,
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
+      h("div",null,h(I,{label:"Fund Name",value:f.fundName,onChange:ch("fundName")}),h(I,{label:"Fund Manager Name",value:f.manager,onChange:ch("manager")})),
+      h("div",null,h(Se,{label:"Month/Year",value:sel,onChange:setSel,options:keys}),h(StatTile,{label:"Monthly Return",value:(monthRet>=0?"+":"")+monthRet.toFixed(2)+"%",col:monthRet>=0?"#34d399":"#ff4444"}))
+    ),
+    h(TA,{label:"Market Commentary (4-6 sentences)",rows:4,value:f.commentary,onChange:ch("commentary")}),
+    h(TA,{label:"Portfolio Activity (4-6 sentences)",rows:4,value:f.activity,onChange:ch("activity")}),
+    h(TA,{label:"Outlook (3-4 sentences)",rows:3,value:f.outlook,onChange:ch("outlook")}),
+    h("button",{onClick:function(){setPv(true);},style:Object.assign({},BS,{background:"#c8f135",border:"none",color:"#000",marginTop:10})},"Preview Investor Letter PDF"),
+
+    pv&&h(PdfPreviewModal,{title:"Monthly Investor Letter",filename:(f.fundName||"fund")+"_letter_"+sel+".pdf",onClose:function(){setPv(false);}},
+      h("div",{className:"pdf-header"},f.fundName),
+      h("p",null,"Dear Investors,"),
+      h("div",{className:"pdf-section-title"},"Performance Summary"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Month Return (net)"),h("td",{className:monthRet>=0?"text-green":"text-red"},(monthRet>=0?"+":"")+monthRet.toFixed(2)+"%")),
+        h("tr",null,h("td",null,"YTD (net)"),h("td",{className:ytd>=0?"text-green":"text-red"},(ytd>=0?"+":"")+ytd.toFixed(2)+"%")),
+        h("tr",null,h("td",null,"Since Inception (net)"),h("td",{className:inc>=0?"text-green":"text-red"},(inc>=0?"+":"")+inc.toFixed(2)+"%")),
+        h("tr",null,h("td",null,"Current Drawdown"),h("td",{className:"text-red"},dd.toFixed(2)+"%"))
+      )),
+      h("div",{className:"pdf-section-title"},"Market Commentary"),
+      h("p",null,f.commentary),
+      h("div",{className:"pdf-section-title"},"Portfolio Activity"),
+      h("p",null,f.activity),
+      h("div",{className:"pdf-section-title"},"Attribution (Closed Trades)"),
+      h("table",null,
+        h("thead",null,h("tr",null,h("th",null,"Instrument"),h("th",null,"Direction"),h("th",null,"P&L %"),h("th",null,"Status"))),
+        h("tbody",null,
+          closed.map(function(t){
+            var p=parseFloat(getR(t).actualPct)||0;
+            return h("tr",{key:t.id},h("td",null,t.pair),h("td",null,t.direction),h("td",{className:p>=0?"text-green":"text-red"},(p>=0?"+":"")+p.toFixed(2)+"%"),h("td",null,"Closed"));
+          }),
+          h("tr",{style:{background:"#F9E8B0"}},h("td",{colSpan:2},h("strong",null,"Net Total")),h("td",{className:totalAttr>=0?"text-green":"text-red"},(totalAttr>=0?"+":"")+totalAttr.toFixed(2)+"%"),h("td",null,""))
+        )
+      ),
+      h("div",{className:"pdf-section-title"},"Risk Summary"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Max intra-month drawdown"),h("td",null,dd.toFixed(2)+"%")),
+        h("tr",null,h("td",null,"Open positions"),h("td",null,openCount)),
+        h("tr",null,h("td",null,"Number of trades"),h("td",null,closed.length)),
+        h("tr",null,h("td",null,"Win rate"),h("td",null,wr+"%"))
+      )),
+      h("div",{className:"pdf-section-title"},"Outlook"),
+      h("p",null,f.outlook),
+      h("p",null,"Thank you for your continued trust and partnership. We remain focused on disciplined risk management and consistent execution."),
+      h("p",null,"Sincerely,\n"+f.manager),
+      h("div",{className:"pdf-footer"},"CONFIDENTIAL — For qualified investors only. Past performance is not indicative of future results.")
+    )
+  );
+}
+
+function ReportsRisk(props){
+  var trades=props.trades||[],firmId=props.firmId||null,acctSize=props.acctSize||null,selFirm=props.selFirm||null;
+  var startBal=parseFloat(acctSize)||100000;
+  function getR(t){return firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);}
+  var now=new Date(),defaultQ=now.getFullYear()+"-Q"+(Math.floor(now.getMonth()/3)+1);
+  var qOpts=[];for(var y=2026;y<=2030;y++){for(var q=1;q<=4;q++){qOpts.push(y+"-Q"+q);}}
+  var qState=useState(defaultQ);var qk=qState[0],setQk=qState[1];
+  var saved=(REPORTS_LS.read().risk)||{
+    fundName:"NBS Master Fund",
+    exposure:{fxPct:"",fxPos:"",cmdPct:"",cmdPos:"",idxPct:"",idxPos:"",cashPct:"",cashPos:"",gross:"",net:""},
+    stress:{
+      ratesPct:"",ratesUsd:"",usdUpPct:"",usdUpUsd:"",usdDnPct:"",usdDnUsd:"",eqPct:"",eqUsd:"",vixPct:"",vixUsd:"",cmdCrashPct:"",cmdCrashUsd:"",liqPct:"",liqUsd:""
+    },
+    limits:{posActual:"",dayActual:"",ddActual:"",grossActual:"",corrActual:""},
+    corr:{spx:"",dxy:"",tlt:"",gold:""}
+  };
+  var fState=useState(saved);var f=fState[0],setF=fState[1];
+  var pState=useState(false);var pv=pState[0],setPv=pState[1];
+  function sv(n){var d=REPORTS_LS.read()||{};d.risk=n;REPORTS_LS.write(d);}
+  function ch(path){return function(e){
+    var n=JSON.parse(JSON.stringify(f)),v=e.target.value,p=path.split(".");
+    if(p.length===1){n[p[0]]=v;}else{n[p[0]][p[1]]=v;}
+    setF(n);sv(n);
+  };}
+
+  var qt=rpt_tradesForQuarter(trades,qk),closed=rpt_closedTradesForAccount(qt,firmId),st=calcStats(qt,startBal,firmId);
+  var dd=rpt_maxDDFromMonthMap(firmId!=null?rpt_monthMapForAccount(qt,firmId,startBal):rpt_monthMap(qt));
+  var ddDur=rpt_drawdownDurationDays(closed,startBal,firmId);
+  var biggestLoss=closed.reduce(function(m,t){var p=parseFloat(getR(t).actualPct)||0;return Math.min(m,startBal*p/100);},0);
+  var wins=closed.filter(function(t){return parseFloat(getR(t).actualPct)>0;}),loss=closed.filter(function(t){return parseFloat(getR(t).actualPct)<0;});
+  var avgW=wins.length?wins.reduce(function(a,t){var p=parseFloat(getR(t).actualPct)||0;return a+startBal*p/100;},0)/wins.length:0;
+  var avgL=loss.length?Math.abs(loss.reduce(function(a,t){var p=parseFloat(getR(t).actualPct)||0;return a+startBal*p/100;},0))/loss.length:0;
+  var rm=closed.map(function(t){
+    var risk=parseFloat(t.riskPct||0),p=parseFloat(getR(t).actualPct||0);
+    return risk>0?p/risk:0;
+  });
+  var avgR=rm.length?rm.reduce(function(a,b){return a+b},0)/rm.length:0;
+  var hold=rpt_avgHoldingDays(closed),cc=rpt_maxConsecutive(closed);
+  function comp(limit,actual,reverse){
+    var l=parseFloat(limit),a=parseFloat(actual);
+    if(isNaN(a))return "";
+    var ok=reverse?a<l:a<=l;
+    return ok?"COMPLIANT":"BREACHED";
+  }
+
+  return h("div",null,
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}},
+      h(I,{label:"Fund Name",value:f.fundName,onChange:ch("fundName")}),
+      h(Se,{label:"Quarter",value:qk,onChange:setQk,options:qOpts})
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10}},
+      h(StatTile,{label:"Quarter Return",value:fmtP(st.np/startBal*100)}),
+      h(StatTile,{label:"Max DD",value:dd.toFixed(2)+"%"}),
+      h(StatTile,{label:"DD Duration",value:ddDur+" days"}),
+      h(StatTile,{label:"Largest Loss",value:fmtC(biggestLoss),col:"#ff4444"})
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10}},
+      h(StatTile,{label:"Avg Winner $",value:fmtC(avgW)}),
+      h(StatTile,{label:"Avg Loser $",value:fmtC(-avgL),col:"#ff4444"}),
+      h(StatTile,{label:"Avg R-multiple",value:avgR.toFixed(2)}),
+      h(StatTile,{label:"Profit Factor",value:st.pf>=99?"∞":st.pf.toFixed(2)})
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}},
+      h(StatTile,{label:"Avg Holding",value:hold.toFixed(1)+"d"}),
+      h(StatTile,{label:"Best Trade",value:fmtC(st.best)}),
+      h(StatTile,{label:"Worst Trade",value:fmtC(st.worst),col:"#ff4444"}),
+      h(StatTile,{label:"Max W / L Streak",value:cc.maxWins+" / "+cc.maxLosses})
+    ),
+
+    h(Divider,{t:"Exposure Breakdown"}),
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}},
+      h(I,{label:"FX (G10) % of AUM",value:f.exposure.fxPct,onChange:ch("exposure.fxPct")}),h(I,{label:"FX Key Positions",value:f.exposure.fxPos,onChange:ch("exposure.fxPos")}),
+      h(I,{label:"Commodities %",value:f.exposure.cmdPct,onChange:ch("exposure.cmdPct")}),h(I,{label:"Commodities Positions",value:f.exposure.cmdPos,onChange:ch("exposure.cmdPos")}),
+      h(I,{label:"Equity Indices %",value:f.exposure.idxPct,onChange:ch("exposure.idxPct")}),h(I,{label:"Indices Positions",value:f.exposure.idxPos,onChange:ch("exposure.idxPos")}),
+      h(I,{label:"Cash %",value:f.exposure.cashPct,onChange:ch("exposure.cashPct")}),h(I,{label:"Cash Notes",value:f.exposure.cashPos,onChange:ch("exposure.cashPos")}),
+      h(I,{label:"Gross Exposure %",value:f.exposure.gross,onChange:ch("exposure.gross")}),h(I,{label:"Net Exposure %",value:f.exposure.net,onChange:ch("exposure.net")})
+    ),
+
+    h(Divider,{t:"Stress Test Results"}),
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}},
+      h(I,{label:"Rates +100bps Impact %",value:f.stress.ratesPct,onChange:ch("stress.ratesPct")}),h(I,{label:"Rates +100bps Impact $",value:f.stress.ratesUsd,onChange:ch("stress.ratesUsd")}),
+      h(I,{label:"USD +5% Impact %",value:f.stress.usdUpPct,onChange:ch("stress.usdUpPct")}),h(I,{label:"USD +5% Impact $",value:f.stress.usdUpUsd,onChange:ch("stress.usdUpUsd")}),
+      h(I,{label:"USD -5% Impact %",value:f.stress.usdDnPct,onChange:ch("stress.usdDnPct")}),h(I,{label:"USD -5% Impact $",value:f.stress.usdDnUsd,onChange:ch("stress.usdDnUsd")}),
+      h(I,{label:"Equities -15% Impact %",value:f.stress.eqPct,onChange:ch("stress.eqPct")}),h(I,{label:"Equities -15% Impact $",value:f.stress.eqUsd,onChange:ch("stress.eqUsd")}),
+      h(I,{label:"VIX to 40 Impact %",value:f.stress.vixPct,onChange:ch("stress.vixPct")}),h(I,{label:"VIX to 40 Impact $",value:f.stress.vixUsd,onChange:ch("stress.vixUsd")}),
+      h(I,{label:"Commodity crash -20% %",value:f.stress.cmdCrashPct,onChange:ch("stress.cmdCrashPct")}),h(I,{label:"Commodity crash -20% $",value:f.stress.cmdCrashUsd,onChange:ch("stress.cmdCrashUsd")}),
+      h(I,{label:"Liquidity crisis 3x spreads %",value:f.stress.liqPct,onChange:ch("stress.liqPct")}),h(I,{label:"Liquidity crisis 3x spreads $",value:f.stress.liqUsd,onChange:ch("stress.liqUsd")})
+    ),
+
+    h(Divider,{t:"Risk Limits + Correlations"}),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:10}},
+      h(I,{label:"Max Position Size actual %",value:f.limits.posActual,onChange:ch("limits.posActual")}),
+      h(I,{label:"Max Daily Loss actual %",value:f.limits.dayActual,onChange:ch("limits.dayActual")}),
+      h(I,{label:"Max Drawdown actual %",value:f.limits.ddActual,onChange:ch("limits.ddActual")}),
+      h(I,{label:"Max Gross Exposure actual %",value:f.limits.grossActual,onChange:ch("limits.grossActual")}),
+      h(I,{label:"Correlation to SPX actual",value:f.limits.corrActual,onChange:ch("limits.corrActual")}),
+      h(I,{label:"Correlation S&P",value:f.corr.spx,onChange:ch("corr.spx")}),
+      h(I,{label:"Correlation DXY",value:f.corr.dxy,onChange:ch("corr.dxy")}),
+      h(I,{label:"Correlation TLT",value:f.corr.tlt,onChange:ch("corr.tlt")}),
+      h(I,{label:"Correlation Gold",value:f.corr.gold,onChange:ch("corr.gold")})
+    ),
+
+    h("button",{onClick:function(){setPv(true);},style:Object.assign({},BS,{background:"#c8f135",border:"none",color:"#000"})},"Preview Quarterly Risk PDF"),
+
+    pv&&h(PdfPreviewModal,{title:"Quarterly Risk Report",filename:(selFirm?selFirm.name:f.fundName||"fund")+"_risk_"+qk+".pdf",onClose:function(){setPv(false);}},
+      h("div",{className:"pdf-header"},selFirm?selFirm.name+" — Quarterly Risk Report":f.fundName),
+      h("div",{className:"pdf-section-title"},"1. Performance Overview"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Quarter Return"),h("td",{className:st.np>=0?"text-green":"text-red"},fmtP(st.np/startBal*100))),
+        h("tr",null,h("td",null,"Max Drawdown"),h("td",{className:"text-red"},dd.toFixed(2)+"%")),
+        h("tr",null,h("td",null,"Drawdown Duration"),h("td",null,ddDur+" days")),
+        h("tr",null,h("td",null,"Largest Single-Trade Loss"),h("td",{className:"text-red"},fmtC(biggestLoss)))
+      )),
+      h("div",{className:"pdf-section-title"},"2. Drawdown Analysis"),
+      h("p",null,"Quarter drawdown peaked at "+dd.toFixed(2)+"% with a maximum underwater duration of "+ddDur+" days."),
+      h("div",{className:"pdf-section-title"},"3. Exposure Breakdown"),
+      h("table",null,h("thead",null,h("tr",null,h("th",null,"Asset"),h("th",null,"% of AUM"),h("th",null,"Key Positions"))),h("tbody",null,
+        h("tr",null,h("td",null,"FX (G10)"),h("td",null,f.exposure.fxPct),h("td",null,f.exposure.fxPos)),
+        h("tr",null,h("td",null,"Commodities"),h("td",null,f.exposure.cmdPct),h("td",null,f.exposure.cmdPos)),
+        h("tr",null,h("td",null,"Equity Indices"),h("td",null,f.exposure.idxPct),h("td",null,f.exposure.idxPos)),
+        h("tr",null,h("td",null,"Cash"),h("td",null,f.exposure.cashPct),h("td",null,f.exposure.cashPos)),
+        h("tr",null,h("td",null,"Gross Exposure"),h("td",{className:"text-navy"},f.exposure.gross),h("td",null,"")),
+        h("tr",null,h("td",null,"Net Exposure"),h("td",{className:"text-navy"},f.exposure.net),h("td",null,""))
+      )),
+      h("div",{className:"pdf-section-title"},"4. Risk Metrics"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Total Trades"),h("td",null,st.tot)),
+        h("tr",null,h("td",null,"Win Rate"),h("td",null,st.winRate+"%")),
+        h("tr",null,h("td",null,"Avg Winner"),h("td",null,fmtC(avgW))),
+        h("tr",null,h("td",null,"Avg Loser"),h("td",null,fmtC(-avgL))),
+        h("tr",null,h("td",null,"Avg R-Multiple"),h("td",null,avgR.toFixed(2))),
+        h("tr",null,h("td",null,"Profit Factor"),h("td",null,st.pf>=99?"∞":st.pf.toFixed(2))),
+        h("tr",null,h("td",null,"Avg Holding"),h("td",null,hold.toFixed(1)+" days")),
+        h("tr",null,h("td",null,"Best / Worst Trade"),h("td",null,fmtC(st.best)+" / "+fmtC(st.worst))),
+        h("tr",null,h("td",null,"Max Consecutive Wins / Losses"),h("td",null,cc.maxWins+" / "+cc.maxLosses))
+      )),
+      h("div",{className:"pdf-section-title"},"5. Stress Test Results"),
+      h("table",null,h("thead",null,h("tr",null,h("th",null,"Scenario"),h("th",null,"Est Impact %"),h("th",null,"Est Impact $"))),h("tbody",null,
+        h("tr",null,h("td",null,"Rates +100bps"),h("td",null,f.stress.ratesPct),h("td",null,f.stress.ratesUsd)),
+        h("tr",null,h("td",null,"USD +5%"),h("td",null,f.stress.usdUpPct),h("td",null,f.stress.usdUpUsd)),
+        h("tr",null,h("td",null,"USD -5%"),h("td",null,f.stress.usdDnPct),h("td",null,f.stress.usdDnUsd)),
+        h("tr",null,h("td",null,"Equities -15%"),h("td",null,f.stress.eqPct),h("td",null,f.stress.eqUsd)),
+        h("tr",null,h("td",null,"VIX to 40"),h("td",null,f.stress.vixPct),h("td",null,f.stress.vixUsd)),
+        h("tr",null,h("td",null,"Commodity crash -20%"),h("td",null,f.stress.cmdCrashPct),h("td",null,f.stress.cmdCrashUsd)),
+        h("tr",null,h("td",null,"Liquidity crisis 3x spreads"),h("td",null,f.stress.liqPct),h("td",null,f.stress.liqUsd))
+      )),
+      h("div",{className:"pdf-section-title"},"6. Correlation Analysis"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"S&P"),h("td",null,f.corr.spx)),
+        h("tr",null,h("td",null,"DXY"),h("td",null,f.corr.dxy)),
+        h("tr",null,h("td",null,"TLT"),h("td",null,f.corr.tlt)),
+        h("tr",null,h("td",null,"Gold"),h("td",null,f.corr.gold))
+      )),
+      h("div",{className:"pdf-section-title"},"7. Trade Statistics"),
+      h("p",null,"Quarter statistics are computed directly from journal trades with no duplicate data entry."),
+      h("div",{className:"pdf-section-title"},"8. Risk Limit Compliance"),
+      h("table",null,h("thead",null,h("tr",null,h("th",null,"Limit"),h("th",null,"Threshold"),h("th",null,"Actual"),h("th",null,"Status"))),h("tbody",null,
+        h("tr",null,h("td",null,"Max Position Size"),h("td",null,"5%"),h("td",null,f.limits.posActual),h("td",{className:comp(5,f.limits.posActual,false)==="COMPLIANT"?"text-green":"text-red"},comp(5,f.limits.posActual,false))),
+        h("tr",null,h("td",null,"Max Daily Loss"),h("td",null,"2%"),h("td",null,f.limits.dayActual),h("td",{className:comp(2,f.limits.dayActual,false)==="COMPLIANT"?"text-green":"text-red"},comp(2,f.limits.dayActual,false))),
+        h("tr",null,h("td",null,"Max Drawdown"),h("td",null,"10%"),h("td",null,f.limits.ddActual),h("td",{className:comp(10,f.limits.ddActual,false)==="COMPLIANT"?"text-green":"text-red"},comp(10,f.limits.ddActual,false))),
+        h("tr",null,h("td",null,"Max Gross Exposure"),h("td",null,"200%"),h("td",null,f.limits.grossActual),h("td",{className:comp(200,f.limits.grossActual,false)==="COMPLIANT"?"text-green":"text-red"},comp(200,f.limits.grossActual,false))),
+        h("tr",null,h("td",null,"Correlation to SPX"),h("td",null,"<0.3"),h("td",null,f.limits.corrActual),h("td",{className:comp(0.3,f.limits.corrActual,true)==="COMPLIANT"?"text-green":"text-red"},comp(0.3,f.limits.corrActual,true)))
+      )),
+      h("div",{className:"pdf-footer"},"CONFIDENTIAL — For qualified investors only. Past performance is not indicative of future results.")
+    )
+  );
+}
+
+// ── ACCOUNT REPORTS PAGE ──
+function AccountReportsPage(props){
+  var trades=props.trades||[],firms=props.firms||[];
+  var accState=useState(firms.length?String(firms[0].id):"");
+  var selAccId=accState[0],setSelAccId=accState[1];
+  var periodState=useState("monthly");
+  var period=periodState[0],setPeriod=periodState[1];
+  var pvState=useState(false);
+  var pv=pvState[0],setPv=pvState[1];
+  var now=new Date();
+  var defMonth=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+  var monthState=useState(defMonth);
+  var selMonth=monthState[0],setSelMonth=monthState[1];
+  function thisWeekStart(){var d=new Date();d.setHours(0,0,0,0);var dow=d.getDay()||7;d.setDate(d.getDate()+1-dow);return d.toISOString().substring(0,10);}
+  var weekState=useState(thisWeekStart());
+  var selWeek=weekState[0],setSelWeek=weekState[1];
+  var defQ=now.getFullYear()+"-Q"+(Math.floor(now.getMonth()/3)+1);
+  var quarterState=useState(defQ);
+  var selQuarter=quarterState[0],setSelQuarter=quarterState[1];
+  var qOpts=[];for(var y2=2025;y2<=2030;y2++){for(var q=1;q<=4;q++){qOpts.push(y2+"-Q"+q);}}
+  var selFirm=firms.find(function(f){return String(f.id)===selAccId});
+  var firmId=selFirm?selFirm.id:null;
+  var acctSize=selFirm?selFirm.accountSize:100000;
+  // collect week keys from trade dates
+  var weekSet={};
+  trades.forEach(function(t){var d=parseDate(t.timestamp);if(d&&(t.firmIds||[]).includes(firmId)){weekSet[getWk(d)]=true;}});
+  var weekOpts=Object.keys(weekSet).sort().reverse().slice(0,52);
+  // month options: 2025-01 to 2030-12
+  var monthOpts=[];for(var ym2=2025;ym2<=2030;ym2++){for(var mo=1;mo<=12;mo++){monthOpts.push(ym2+"-"+String(mo).padStart(2,"0"));}}
+
+  function addDays(d,n){var r=new Date(d);r.setDate(r.getDate()+n);return r;}
+  function tradesForPeriod(){
+    if(!firmId)return[];
+    var ft=trades.filter(function(t){return(t.firmIds||[]).includes(firmId);});
+    if(period==="weekly"){
+      var wStart=new Date(selWeek+"T00:00:00");
+      var wEnd=addDays(wStart,7);
+      return ft.filter(function(t){var d=parseDate(t.timestamp);return d&&d>=wStart&&d<wEnd;});
+    }
+    if(period==="monthly"){
+      return ft.filter(function(t){var d=parseDate(t.timestamp);return d&&(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"))===selMonth;});
+    }
+    if(period==="quarterly"){
+      return ft.filter(function(t){var d=parseDate(t.timestamp);return d&&rpt_quarterKey(d)===selQuarter;});
+    }
+    return ft;
+  }
+  function reportLabel(){
+    if(period==="weekly")return"Week of "+selWeek;
+    if(period==="monthly")return selMonth;
+    if(period==="quarterly")return selQuarter;
+    return"";
+  }
+  var periodTrades=tradesForPeriod();
+  var closed=rpt_closedTradesForAccount(periodTrades,firmId);
+  var pnlPct=closed.reduce(function(s,t){return s+(parseFloat(getAccRes(t,firmId).actualPct)||0);},0);
+  var pnlDollar=acctSize*pnlPct/100;
+  var wins=closed.filter(function(t){return parseFloat(getAccRes(t,firmId).actualPct)>0;});
+  var losses=closed.filter(function(t){return parseFloat(getAccRes(t,firmId).actualPct)<0;});
+  var wr=closed.length?Math.round(wins.length/closed.length*100):0;
+  var gp=wins.reduce(function(s,t){return s+(parseFloat(getAccRes(t,firmId).actualPct)||0);},0);
+  var gl=Math.abs(losses.reduce(function(s,t){return s+(parseFloat(getAccRes(t,firmId).actualPct)||0);},0));
+  var pf=gl>0?gp/gl:(wins.length?99:0);
+  var bestPct=closed.length?closed.reduce(function(b,t){return Math.max(b,parseFloat(getAccRes(t,firmId).actualPct)||0);},0):0;
+  var worstPct=closed.length?closed.reduce(function(b,t){return Math.min(b,parseFloat(getAccRes(t,firmId).actualPct)||0);},0):0;
+  var periodEq=perfEquitySeriesForAccount(periodTrades,acctSize,firmId);
+  var periodDD=perfDrawdownSeries(periodEq);
+  var allFirmTrades=firmId?trades.filter(function(t){return(t.firmIds||[]).includes(firmId);}):[];
+  var allStats=firmId?calcStats(allFirmTrades,acctSize,firmId):{bal:acctSize,tot:0};
+  var currentBal=allStats.bal||acctSize;
+  var maxDailyPct=selFirm?selFirm.maxDaily:0;
+  var maxDDPct=selFirm?selFirm.maxDrawdown:0;
+  function checkDailyCompliance(){
+    if(!maxDailyPct||!closed.length)return null;
+    var dayMap={};
+    closed.forEach(function(t){
+      var d=parseDate(t.timestamp);if(!d)return;
+      var k=dKey(d);if(!dayMap[k])dayMap[k]=0;
+      dayMap[k]+=(parseFloat(getAccRes(t,firmId).actualPct)||0);
+    });
+    var worstDay=Object.values(dayMap).reduce(function(m,v){return Math.min(m,v);},0);
+    var worstDayLoss=Math.abs(Math.min(0,worstDay));
+    return{worstDayLoss:worstDayLoss,limit:maxDailyPct,compliant:worstDayLoss<=maxDailyPct};
+  }
+  var dailyComp=checkDailyCompliance();
+  var ddCompliant=maxDDPct!=null&&maxDDPct>0?(periodDD.maxDD<=maxDDPct):null;
+
+  if(!selFirm)return h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:"#555",padding:20}},"No accounts found.");
+
+  var btnStyle=function(active){return{flex:1,padding:"8px 0",border:"1px solid "+(active?"rgba(200,241,53,.4)":"#1e1e1e"),background:active?"rgba(200,241,53,.09)":"#111",color:active?"#c8f135":"#555",borderRadius:6,cursor:"pointer",fontFamily:"'DM Mono',monospace",fontSize:10,letterSpacing:1,textTransform:"uppercase"};};
+
+  return h("div",{className:"fade"},
+    // Controls
+    h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}},
+      h("div",null,
+        h("div",{style:Object.assign({},LB,{marginBottom:4})},"Account"),
+        h("select",{value:selAccId,onChange:function(e){setSelAccId(e.target.value);},style:Object.assign({},IS,{appearance:"none"})},
+          firms.map(function(f){return h("option",{key:f.id,value:String(f.id)},f.name+" — "+f.phase);})
+        )
+      ),
+      h("div",null,
+        h("div",{style:Object.assign({},LB,{marginBottom:4})},"Period"),
+        h("div",{style:{display:"flex",gap:5}},
+          ["weekly","monthly","quarterly"].map(function(p){return h("button",{key:p,onClick:function(){setPeriod(p);},style:btnStyle(period===p)},p);})
+        )
+      )
+    ),
+    h("div",{style:{marginBottom:12}},
+      period==="monthly"&&h("div",null,
+        h("div",{style:Object.assign({},LB,{marginBottom:4})},"Month"),
+        h("select",{value:selMonth,onChange:function(e){setSelMonth(e.target.value);},style:Object.assign({},IS,{appearance:"none"})},
+          monthOpts.map(function(k){return h("option",{key:k,value:k},k);})
+        )
+      ),
+      period==="weekly"&&h("div",null,
+        h("div",{style:Object.assign({},LB,{marginBottom:4})},"Week Starting"),
+        h("select",{value:selWeek,onChange:function(e){setSelWeek(e.target.value);},style:Object.assign({},IS,{appearance:"none"})},
+          weekOpts.length?weekOpts.map(function(w){return h("option",{key:w,value:w},w);}):h("option",{value:selWeek},selWeek)
+        )
+      ),
+      period==="quarterly"&&h("div",null,
+        h("div",{style:Object.assign({},LB,{marginBottom:4})},"Quarter"),
+        h("select",{value:selQuarter,onChange:function(e){setSelQuarter(e.target.value);},style:Object.assign({},IS,{appearance:"none"})},
+          qOpts.map(function(k){return h("option",{key:k,value:k},k);})
+        )
+      )
+    ),
+    // Stats
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:8}},
+      h(StatTile,{label:"Period P&L",value:(pnlPct>=0?"+":"")+pnlPct.toFixed(2)+"%",col:pnlPct>=0?"#34d399":"#ff4444",sub:(pnlDollar>=0?"+ $":"- $")+Math.abs(pnlDollar).toFixed(0)}),
+      h(StatTile,{label:"Win Rate",value:wr+"%",col:wr>=50?"#34d399":"#f0a500",sub:closed.length+" trades"}),
+      h(StatTile,{label:"Profit Factor",value:pf>=99?"∞":pf.toFixed(2),col:pf>=1.5?"#34d399":pf>=1?"#f0a500":"#ff4444"}),
+      h(StatTile,{label:"Max DD (Period)",value:periodDD.maxDD.toFixed(2)+"%",col:"#ff4444"})
+    ),
+    h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:12}},
+      h(StatTile,{label:"Best Trade",value:(bestPct>=0?"+":"")+bestPct.toFixed(2)+"%",col:"#34d399"}),
+      h(StatTile,{label:"Worst Trade",value:worstPct.toFixed(2)+"%",col:"#ff4444"}),
+      h(StatTile,{label:"Starting Balance",value:"$"+acctSize.toLocaleString()}),
+      h(StatTile,{label:"Current Balance",value:"$"+currentBal.toLocaleString(undefined,{maximumFractionDigits:0}),col:currentBal>=acctSize?"#34d399":"#ff4444"})
+    ),
+    // Rule compliance
+    (maxDailyPct||maxDDPct)&&h("div",{style:{background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:8,padding:12,marginBottom:12}},
+      h("div",{style:Object.assign({},LB,{marginBottom:8})},"Rule Compliance — "+reportLabel()),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+        maxDailyPct&&dailyComp&&h("div",{style:{background:dailyComp.compliant?"rgba(52,211,153,.05)":"rgba(255,68,68,.05)",border:"1px solid "+(dailyComp.compliant?"rgba(52,211,153,.2)":"rgba(255,68,68,.2)"),borderRadius:6,padding:10}},
+          h("div",{style:Object.assign({},LB,{marginBottom:4})},"Max Daily Loss"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:15,fontWeight:"bold",color:dailyComp.compliant?"#34d399":"#ff4444",marginBottom:4}},dailyComp.compliant?"COMPLIANT":"BREACHED"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555"}},"Worst day: "+dailyComp.worstDayLoss.toFixed(2)+"% / Limit: "+maxDailyPct+"%")
+        ),
+        maxDDPct&&ddCompliant!=null&&h("div",{style:{background:ddCompliant?"rgba(52,211,153,.05)":"rgba(255,68,68,.05)",border:"1px solid "+(ddCompliant?"rgba(52,211,153,.2)":"rgba(255,68,68,.2)"),borderRadius:6,padding:10}},
+          h("div",{style:Object.assign({},LB,{marginBottom:4})},"Max Drawdown"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:15,fontWeight:"bold",color:ddCompliant?"#34d399":"#ff4444",marginBottom:4}},ddCompliant?"COMPLIANT":"BREACHED"),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#555"}},"Period DD: "+periodDD.maxDD.toFixed(2)+"% / Limit: "+maxDDPct+"%")
+        )
+      )
+    ),
+    // Trades table
+    closed.length>0&&h("div",{style:{background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:8,padding:12,marginBottom:12,overflowX:"auto"}},
+      h("div",{style:Object.assign({},LB,{marginBottom:8})},"Closed Trades — "+reportLabel()),
+      h("table",{style:{width:"100%",borderCollapse:"collapse",fontFamily:"'DM Mono',monospace",fontSize:11}},
+        h("thead",null,h("tr",null,
+          ["Date","Pair","Dir","Entry","SL","TP","R:R","Outcome","P&L %"].map(function(hd){
+            return h("th",{key:hd,style:{padding:"6px 8px",textAlign:"left",borderBottom:"1px solid #1e1e1e",color:"#555",fontWeight:"normal",letterSpacing:1,textTransform:"uppercase",fontSize:9}},hd);
+          })
+        )),
+        h("tbody",null,
+          closed.map(function(t){
+            var r=getAccRes(t,firmId);
+            var p=parseFloat(r.actualPct)||0;
+            return h("tr",{key:t.id,style:{borderBottom:"1px solid #0f0f0f"}},
+              h("td",{style:{padding:"6px 8px",color:"#555"}},t.timestamp?t.timestamp.substring(0,10):"–"),
+              h("td",{style:{padding:"6px 8px",color:"white",fontWeight:"bold"}},t.pair||"–"),
+              h("td",{style:{padding:"6px 8px",color:t.direction==="BUY"?"#34d399":"#f87171"}},t.direction||"–"),
+              h("td",{style:{padding:"6px 8px",color:"#aaa"}},t.entry||"–"),
+              h("td",{style:{padding:"6px 8px",color:"#aaa"}},t.sl||"–"),
+              h("td",{style:{padding:"6px 8px",color:"#aaa"}},t.tp||"–"),
+              h("td",{style:{padding:"6px 8px",color:"#aaa"}},t.rr?t.rr+"R":"–"),
+              h("td",{style:{padding:"6px 8px",color:"#888",fontSize:10}},r.outcome?r.outcome.split("—")[0].trim():"–"),
+              h("td",{style:{padding:"6px 8px",fontWeight:"bold",color:p>=0?"#34d399":"#ff4444"}},(p>=0?"+":"")+p.toFixed(2)+"%")
+            );
+          })
+        )
+      )
+    ),
+    closed.length===0&&h("div",{style:{textAlign:"center",padding:"40px 0",fontFamily:"'DM Mono',monospace",fontSize:12,color:"#333"}},"No closed trades for this period."),
+    // PDF export
+    h("button",{onClick:function(){setPv(true);},style:Object.assign({},BS,{background:"#c8f135",border:"none",color:"#000",marginBottom:12})},"Preview & Export PDF"),
+    pv&&h(PdfPreviewModal,{
+      title:selFirm.name+" — "+period.charAt(0).toUpperCase()+period.slice(1)+" Report",
+      filename:selFirm.name.replace(/\s+/g,"_")+"_"+period+"_"+reportLabel()+".pdf",
+      onClose:function(){setPv(false);}
+    },
+      h("div",{className:"pdf-header"},selFirm.name),
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#555",marginBottom:16}},period.charAt(0).toUpperCase()+period.slice(1)+" Report — "+reportLabel()),
+      h("div",{className:"snapshot-grid"},
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"PERIOD P&L"),h("div",{className:"snapshot-val",style:{color:pnlPct>=0?"#1B7A3D":"#B22222"}},(pnlPct>=0?"+":"")+pnlPct.toFixed(2)+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"WIN RATE"),h("div",{className:"snapshot-val text-navy"},wr+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"TRADES"),h("div",{className:"snapshot-val text-navy"},closed.length)),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"PROFIT FACTOR"),h("div",{className:"snapshot-val text-navy"},pf>=99?"∞":pf.toFixed(2))),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"MAX DD"),h("div",{className:"snapshot-val text-red"},periodDD.maxDD.toFixed(2)+"%")),
+        h("div",{className:"snapshot-box"},h("div",{className:"snapshot-label"},"CURRENT BAL"),h("div",{className:"snapshot-val text-navy"},"$"+currentBal.toLocaleString(undefined,{maximumFractionDigits:0})))
+      ),
+      h("div",{className:"pdf-section-title"},"Account Details"),
+      h("table",null,h("tbody",null,
+        h("tr",null,h("td",null,"Account"),h("td",null,selFirm.name)),
+        h("tr",null,h("td",null,"Phase"),h("td",null,selFirm.phase)),
+        h("tr",null,h("td",null,"Starting Balance"),h("td",null,"$"+acctSize.toLocaleString())),
+        h("tr",null,h("td",null,"Current Balance"),h("td",{className:currentBal>=acctSize?"text-green":"text-red"},"$"+currentBal.toLocaleString(undefined,{maximumFractionDigits:0}))),
+        maxDailyPct&&h("tr",null,h("td",null,"Max Daily Loss Limit"),h("td",null,maxDailyPct+"%")),
+        maxDDPct&&h("tr",null,h("td",null,"Max Drawdown Limit"),h("td",null,maxDDPct+"%"))
+      )),
+      (dailyComp||ddCompliant!=null)&&h("div",{className:"pdf-section-title"},"Compliance"),
+      (dailyComp||ddCompliant!=null)&&h("table",null,h("tbody",null,
+        dailyComp&&h("tr",null,h("td",null,"Daily Loss"),h("td",{className:dailyComp.compliant?"text-green":"text-red"},dailyComp.compliant?"COMPLIANT":"BREACHED — worst day: "+dailyComp.worstDayLoss.toFixed(2)+"%")),
+        ddCompliant!=null&&h("tr",null,h("td",null,"Drawdown"),h("td",{className:ddCompliant?"text-green":"text-red"},ddCompliant?"COMPLIANT":"BREACHED — period DD: "+periodDD.maxDD.toFixed(2)+"%"))
+      )),
+      closed.length>0&&h("div",{className:"pdf-section-title"},"Trades"),
+      closed.length>0&&h("table",null,
+        h("thead",null,h("tr",null,h("th",null,"Date"),h("th",null,"Pair"),h("th",null,"Dir"),h("th",null,"R:R"),h("th",null,"Outcome"),h("th",null,"P&L %"))),
+        h("tbody",null,
+          closed.map(function(t){
+            var r=getAccRes(t,firmId);var p=parseFloat(r.actualPct)||0;
+            return h("tr",{key:t.id},
+              h("td",null,t.timestamp?t.timestamp.substring(0,10):"–"),
+              h("td",null,t.pair||"–"),
+              h("td",null,t.direction||"–"),
+              h("td",null,t.rr?t.rr+"R":"–"),
+              h("td",null,r.outcome||"–"),
+              h("td",{className:p>=0?"text-green":"text-red"},(p>=0?"+":"")+p.toFixed(2)+"%")
+            );
+          })
+        )
+      ),
+      h("div",{className:"pdf-footer"},"Generated by NBS Journal v13 — "+new Date().toLocaleDateString("en-GB"))
+    )
+  );
+}
+
+// ── MAIN APP ──
+function PerfLineChart(props){
+  var data=props.data||[], hgt=props.h||180;
+  if(!data.length)return h("div",{style:{height:hgt,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono',monospace",fontSize:11,color:"#333"}},"No data");
+  var vals=data.map(function(d){return d==null?null:d;}).filter(function(v){return v!=null;});
+  if(!vals.length)return h("div",{style:{height:hgt}});
+  var mn=Math.min.apply(null,vals), mx=Math.max.apply(null,vals);
+  if(mx===mn){mx+=1;mn-=1;}
+  var W=760,H=hgt,P=20;
+  function x(i){return P+(i/(data.length-1||1))*(W-P*2);}
+  function y(v){return H-P-((v-mn)/(mx-mn))*(H-P*2);}
+  var pts=data.map(function(v,i){return v==null?null:(x(i).toFixed(1)+","+y(v).toFixed(1));}).filter(Boolean).join(" ");
+  return h("svg",{viewBox:"0 0 "+W+" "+H,style:{width:"100%",height:hgt,display:"block"}},
+    h("line",{x1:P,y1:H-P,x2:W-P,y2:H-P,stroke:"#202020",strokeWidth:"1"}),
+    h("polyline",{points:pts,fill:"none",stroke:props.col||"#38bdf8",strokeWidth:"2",strokeLinecap:"round",strokeLinejoin:"round"})
+  );
+}
+function PerfBarChart(props){
+  var data=props.data||[], hgt=180;
+  if(!data.length)return h("div",{style:{height:hgt,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono',monospace",fontSize:11,color:"#333"}},"No data");
+  var vals=data.map(function(d){return d.v;});
+  var maxAbs=Math.max(1,Math.max.apply(null,vals.map(function(v){return Math.abs(v);}))); 
+  var W=760,H=hgt,P=24,bw=(W-P*2)/data.length*0.7,gap=(W-P*2)/data.length*0.3;
+  var zeroY=H/2;
+  return h("svg",{viewBox:"0 0 "+W+" "+H,style:{width:"100%",height:hgt,display:"block"}},
+    h("line",{x1:P,y1:zeroY,x2:W-P,y2:zeroY,stroke:"#222",strokeWidth:"1"}),
+    data.map(function(d,i){
+      var x=P+i*(bw+gap)+gap/2;
+      var hh=Math.abs(d.v)/maxAbs*(H/2-P);
+      var y=d.v>=0?zeroY-hh:zeroY;
+      return h("rect",{key:i,x:x,y:y,width:bw,height:hh,fill:d.v>=0?"#34d399":"#ff4444",opacity:.9});
+    })
+  );
+}
+function PerfHistogram(props){
+  var arr=props.values||[], bins=props.bins||10, hgt=180;
+  if(!arr.length)return h("div",{style:{height:hgt,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'DM Mono',monospace",fontSize:11,color:"#333"}},"No R data");
+  var mn=Math.min.apply(null,arr), mx=Math.max.apply(null,arr);
+  if(mx===mn){mx+=1;mn-=1;}
+  var step=(mx-mn)/bins, bucket=new Array(bins).fill(0);
+  arr.forEach(function(v){
+    var idx=Math.min(bins-1,Math.max(0,Math.floor((v-mn)/step)));
+    bucket[idx]++;
+  });
+  var maxC=Math.max.apply(null,bucket)||1;
+  var W=760,H=hgt,P=24,bw=(W-P*2)/bins-2;
+  return h("svg",{viewBox:"0 0 "+W+" "+H,style:{width:"100%",height:hgt,display:"block"}},
+    bucket.map(function(c,i){
+      var hh=(c/maxC)*(H-P*2),x=P+i*((W-P*2)/bins),y=H-P-hh;
+      return h("rect",{key:i,x:x,y:y,width:bw,height:hh,fill:"#a78bfa"});
+    })
+  );
+}
+function PerfHeatmap(props){
+  var m=props.monthMap||{}, sel=props.sel, onSel=props.onSel;
+  var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  function color(v){
+    if(v==null)return"#0b0b0b";
+    if(v>0){var a=Math.min(1,Math.abs(v)/8);return "rgba(52,211,153,"+(0.15+0.45*a)+")";}
+    if(v<0){var b=Math.min(1,Math.abs(v)/8);return "rgba(255,68,68,"+(0.15+0.45*b)+")";}
+    return "#111";
+  }
+  return h("div",{style:{overflowX:"auto"}},
+    h("table",{style:{width:"100%",borderCollapse:"collapse",fontFamily:"'DM Mono',monospace",fontSize:10,minWidth:700}},
+      h("thead",null,h("tr",null,h("th",{style:{padding:"6px",border:"1px solid #1e1e1e",color:"#888"}},"Year"),months.map(function(mm){return h("th",{key:mm,style:{padding:"6px",border:"1px solid #1e1e1e",color:"#888"}},mm)}),h("th",{style:{padding:"6px",border:"1px solid #1e1e1e",color:"#888"}},"YTD"))),
+      h("tbody",null,[2026,2027,2028,2029,2030].map(function(y){
+        var eq=1,has=false,ytd=0;
+        return h("tr",{key:y},
+          h("td",{style:{padding:"6px",border:"1px solid #1e1e1e",color:"#999"}},String(y)),
+          months.map(function(_,i){
+            var k=y+"-"+String(i+1).padStart(2,"0"), v=m[k]?m[k].ret:null;
+            if(v!=null){has=true;eq*=(1+v/100);ytd=(eq-1)*100;}
+            return h("td",{key:k,onClick:function(){if(v!=null&&onSel)onSel(k);},style:{padding:"6px",textAlign:"center",border:"1px solid "+(k===sel?"#C9A84C":"#1e1e1e"),background:color(v),color:v==null?"#555":(v>=0?"#34d399":"#ff4444"),cursor:v==null?"default":"pointer"}},v==null?"–":v.toFixed(1)+"%");
+          }),
+          h("td",{style:{padding:"6px",border:"1px solid #1e1e1e",color:has?(ytd>=0?"#34d399":"#ff4444"):"#555"}},has?ytd.toFixed(1)+"%":"–")
+        );
+      }))
+    )
+  );
+}
+function PerformancePage(props){
+  var trades=props.trades||[];
+  var firms=props.firms||[];
+  var accState=useState("all");var selAccId=accState[0],setSelAccId=accState[1];
+  var selFirm=selAccId!=="all"?firms.find(function(f){return String(f.id)===selAccId}):null;
+  var firmId=selFirm?selFirm.id:null;
+  var acctSize=selFirm?selFirm.accountSize:100000;
+
+  // Per-account aware data derivation
+  var monthMap=firmId!=null?perfMonthlyMapForAccount(trades,firmId):perfMonthlyMap(trades);
+  var monthKeys=perfOrderedMonthKeys(monthMap);
+  var monthReturns=monthKeys.map(function(k){return monthMap[k].ret||0;});
+  var ann=perfAnnualized(monthReturns);
+  var sd=perfStd(monthReturns),dsd=perfDownsideDev(monthReturns);
+  var enoughData=monthReturns.length>=3;
+  var sharpe=enoughData&&sd?((ann-4.5)/(sd*Math.sqrt(12))):null;
+  var sortino=enoughData&&dsd?((ann-4.5)/(dsd*Math.sqrt(12))):null;
+  var eq=firmId!=null?perfEquitySeriesForAccount(trades,acctSize,firmId):perfEquitySeries(trades);
+  var ddInfo=perfDrawdownSeries(eq);
+  var calmar=enoughData&&ddInfo.maxDD?ann/ddInfo.maxDD:null;
+
+  // Per-account pfExp and rr
+  function getR2(t){return firmId!=null?getAccRes(t,firmId):getCanonicalRes(t);}
+  var cl2=(trades||[]).filter(function(t){
+    if(firmId!=null&&!(t.firmIds||[]).includes(firmId))return false;
+    var r=getR2(t);return r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null&&!isNaN(parseFloat(r.actualPct));
+  });
+  var w2=cl2.filter(function(t){return parseFloat(getR2(t).actualPct)>0;});
+  var l2=cl2.filter(function(t){return parseFloat(getR2(t).actualPct)<0;});
+  var gp2=w2.reduce(function(a,t){return a+parseFloat(getR2(t).actualPct);},0);
+  var gl2=Math.abs(l2.reduce(function(a,t){return a+parseFloat(getR2(t).actualPct);},0));
+  var pfExp={pf:gl2>0?gp2/gl2:(w2.length?99:0),exp:cl2.length?((w2.length/cl2.length)*(w2.length?gp2/w2.length:0))-((l2.length/cl2.length)*(l2.length?gl2/l2.length:0)):0,wins:w2.length,losses:l2.length,total:cl2.length};
+  var rs2=[];var cw2=0,cl3=0,mw2=0,ml2=0;
+  cl2.slice().sort(function(a,b){return(parseDate(a.timestamp)||0)-(parseDate(b.timestamp)||0);}).forEach(function(t){
+    var ap=parseFloat(getR2(t).actualPct),rp=parseFloat(t.riskPct||0);
+    var rv=(!isNaN(ap)&&!isNaN(rp)&&rp>0)?(ap/rp):null;
+    if(rv!=null&&isFinite(rv))rs2.push(rv);
+    if(ap>0){cw2++;cl3=0;if(cw2>mw2)mw2=cw2;}else if(ap<0){cl3++;cw2=0;if(cl3>ml2)ml2=cl3;}else{cw2=0;cl3=0;}
+  });
+  var rr={avgR:rs2.length?perfMean(rs2):0,maxWins:mw2,maxLosses:ml2,rValues:rs2};
+  var setup=perfSetupWinRates(trades);
+
+  var rolling3Sharpe=perfRolling(monthReturns,3,function(sub){
+    var a=perfAnnualized(sub),s=perfStd(sub);return s?((a-4.5)/(s*Math.sqrt(12))):0;
+  });
+  var rolling12Ret=perfRolling(monthReturns,12,function(sub){return perfAnnualized(sub);});
+  var selState=useState(monthKeys.length?monthKeys[monthKeys.length-1]:"");
+  var sel=selState[0],setSel=selState[1];
+  var corrState=useState((REPORTS_LS.read().performance||{}).spxInput||"");
+  var spxInput=corrState[0],setSpxInput=corrState[1];
+  function saveCorr(v){var d=REPORTS_LS.read()||{};d.performance=Object.assign({},d.performance||{},{spxInput:v});REPORTS_LS.write(d);}
+  var spxArr=spxInput.split(",").map(function(x){return parseFloat(x.trim());}).filter(function(x){return !isNaN(x);});
+  var corr=perfCorr(monthReturns,spxArr);
+  var tipState=useState(null);var tip=tipState[0],setTip=tipState[1];
+  function onEqMove(e){
+    if(!eq.length)return;
+    var box=e.currentTarget.getBoundingClientRect();
+    var x=(e.clientX-box.left)/box.width;
+    var idx=Math.max(0,Math.min(eq.length-1,Math.round(x*(eq.length-1))));
+    setTip({x:e.clientX-box.left,y:e.clientY-box.top,idx:idx,point:eq[idx]});
+  }
+  function fmtRatio(v,dec){return v!=null?(isFinite(v)?v.toFixed(dec!=null?dec:2):"∞"):"N/A";}
+  var naColor="#555";
+  return h("div",{className:"fade"},
+    // Account selector
+    h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}},
+      h("div",{style:Object.assign({},LB,{marginRight:4})},"Account"),
+      h("select",{value:selAccId,onChange:function(e){setSelAccId(e.target.value);},style:Object.assign({},IS,{width:"auto",minWidth:220,fontSize:11})},
+        h("option",{value:"all"},"All Accounts (Portfolio)"),
+        firms.map(function(f){return h("option",{key:f.id,value:String(f.id)},f.name+" — "+f.phase+" ($"+Number(f.accountSize).toLocaleString()+")");})
+      ),
+      selFirm&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:selFirm.color,letterSpacing:1}},selFirm.name)
+    ),
+    // All-accounts summary cards
+    selAccId==="all"&&firms.length>0&&h("div",{style:{display:"grid",gridTemplateColumns:"repeat("+Math.min(firms.length,3)+",1fr)",gap:8,marginBottom:12}},
+      firms.map(function(f){
+        var ft=trades.filter(function(t){return(t.firmIds||[]).includes(f.id);});
+        var fmm=perfMonthlyMapForAccount(ft,f.id);
+        var fkeys=perfOrderedMonthKeys(fmm);
+        var fret=fkeys.map(function(k){return fmm[k].ret||0;});
+        var fann=perfAnnualized(fret);
+        var feq=perfEquitySeriesForAccount(ft,f.accountSize,f.id);
+        var fdd=perfDrawdownSeries(feq);
+        var fs=calcStats(ft,f.accountSize,f.id);
+        var fnet=f.accountSize?(fs.bal-f.accountSize)/f.accountSize*100:0;
+        return h("div",{key:f.id,style:{background:"#0d0d0d",border:"1px solid "+f.color+"22",borderTop:"2px solid "+f.color,borderRadius:8,padding:11}},
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:f.color,letterSpacing:2,textTransform:"uppercase",marginBottom:8}},f.name),
+          h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5}},
+            h(StatTile,{label:"Balance",value:"$"+fs.bal.toLocaleString(undefined,{maximumFractionDigits:0})}),
+            h(StatTile,{label:"Net %",value:(fnet>=0?"+":"")+fnet.toFixed(2)+"%",col:fnet>=0?"#34d399":"#ff4444"}),
+            h(StatTile,{label:"Win Rate",value:fs.tot?fs.winRate+"%":"–"}),
+            h(StatTile,{label:"Max DD",value:fdd.maxDD.toFixed(2)+"%",col:"#ff4444"})
+          )
+        );
+      })
+    ),
+    // Sticky stats bar
+    h("div",{style:{position:"sticky",top:74,zIndex:5,background:"#070707",paddingBottom:10}},
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}},
+        h(StatTile,{label:"Annualized Return",value:(ann>=0?"+":"")+ann.toFixed(2)+"%",col:ann>=0?"#34d399":"#ff4444"}),
+        h(StatTile,{label:"Sharpe Ratio",value:fmtRatio(sharpe),sub:sharpe!=null?"Target > 1.0":"< 3 months data",col:sharpe!=null?(sharpe>1?"#34d399":"#f0a500"):naColor}),
+        h(StatTile,{label:"Sortino Ratio",value:fmtRatio(sortino),sub:sortino!=null?"Target > 1.5":"< 3 months data",col:sortino!=null?(sortino>1.5?"#34d399":"#f0a500"):naColor}),
+        h(StatTile,{label:"Calmar Ratio",value:fmtRatio(calmar),sub:calmar!=null?"Target > 2.0":"< 3 months data",col:calmar!=null?(calmar>2?"#34d399":"#f0a500"):naColor}),
+        h(StatTile,{label:"Max Drawdown",value:ddInfo.maxDD.toFixed(2)+"%",col:"#ff4444"}),
+        h(StatTile,{label:"Max DD Duration",value:ddInfo.maxDuration+"d"}),
+        h(StatTile,{label:"Current Drawdown",value:ddInfo.currentDD.toFixed(2)+"%",col:ddInfo.currentDD>0?"#ff4444":"#34d399"}),
+        h(StatTile,{label:"Profit Factor",value:pfExp.pf>=99?"∞":pfExp.pf.toFixed(2),col:pfExp.pf>=1.5?"#34d399":"#f0a500"}),
+        h(StatTile,{label:"Expectancy",value:(pfExp.exp>=0?"+":"")+pfExp.exp.toFixed(2)+"%",sub:"per trade",col:pfExp.exp>=0?"#34d399":"#ff4444"}),
+        h(StatTile,{label:"Average R-Multiple",value:rr.avgR.toFixed(2)+"R",col:rr.avgR>=0?"#34d399":"#ff4444"}),
+        h(StatTile,{label:"Max Consecutive Wins",value:rr.maxWins,col:"#34d399"}),
+        h(StatTile,{label:"Max Consecutive Losses",value:rr.maxLosses,col:"#ff4444"})
+      )
+    ),
+    h("div",{style:{marginTop:8,display:"flex",flexDirection:"column",gap:12}},
+      h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12,position:"relative"},onMouseMove:onEqMove,onMouseLeave:function(){setTip(null);}},
+        h("div",{style:Object.assign({},LB,{marginBottom:6})},selFirm?"Equity Curve — "+selFirm.name:"Equity Curve (All Accounts)"),
+        h(PerfLineChart,{data:eq.map(function(p){return p.bal;}),h:220,col:selFirm?selFirm.color:"#34d399"}),
+        tip&&tip.point&&h("div",{style:{position:"absolute",left:Math.max(10,Math.min(650,tip.x+8)),top:Math.max(10,tip.y-32),background:"#0a0a0a",border:"1px solid #2a2a2a",borderRadius:6,padding:"6px 8px",fontFamily:"'DM Mono',monospace",fontSize:10,color:"#ccc"}},
+          (tip.point.date?tip.point.date.toLocaleDateString("en-GB"):"Start")+" | Bal "+tip.point.bal.toFixed(2)
+        )
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+        h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+          h("div",{style:Object.assign({},LB,{marginBottom:6})},"Monthly Returns"),
+          h(PerfBarChart,{data:monthKeys.map(function(k){return {k:k,v:monthMap[k].ret||0};})})
+        ),
+        h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+          h("div",{style:Object.assign({},LB,{marginBottom:6})},"Drawdown Chart"),
+          h(PerfLineChart,{data:ddInfo.series.map(function(d){return d.dd;}),h:180,col:"#ff4444"})
+        )
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+        h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+          h("div",{style:Object.assign({},LB,{marginBottom:6})},"R-Multiple Distribution"),
+          h(PerfHistogram,{values:rr.rValues,bins:10})
+        ),
+        h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+          h("div",{style:Object.assign({},LB,{marginBottom:6})},"Win Rate by Setup Type"),
+          h(PerfBarChart,{data:setup.map(function(s){return {k:s.setup,v:s.wr};})})
+        )
+      ),
+      h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+        h("div",{style:Object.assign({},LB,{marginBottom:6})},"Monthly Returns Heatmap"),
+        h(PerfHeatmap,{monthMap:monthMap,sel:sel,onSel:setSel})
+      ),
+      h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+        h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+          h("div",{style:Object.assign({},LB,{marginBottom:6})},"Rolling 3-Month Sharpe"),
+          h(PerfLineChart,{data:rolling3Sharpe,h:170,col:"#a78bfa"})
+        ),
+        h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+          h("div",{style:Object.assign({},LB,{marginBottom:6})},"Rolling 12-Month Return"),
+          h(PerfLineChart,{data:rolling12Ret,h:170,col:"#38bdf8"})
+        )
+      ),
+      h("div",{style:{background:"#0d0d0d",border:"1px solid #161616",borderRadius:8,padding:12}},
+        h("div",{style:Object.assign({},LB,{marginBottom:6})},"Correlation (Optional)"),
+        h(TA,{label:"Paste 12 monthly S&P returns (comma-separated)",rows:3,value:spxInput,onChange:function(e){setSpxInput(e.target.value);saveCorr(e.target.value);},placeholder:"1.2,-0.8,2.1,..."}),
+        h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:"#aaa",marginTop:8}},
+          "Correlation to S&P: ",
+          h("span",{style:{color:corr==null?"#777":(Math.abs(corr)<0.3?"#34d399":"#ff4444"),fontWeight:"bold"}},corr==null?"N/A":corr.toFixed(3)),
+          " ",corr==null?"":(Math.abs(corr)<0.3?"(Good: < 0.3)":"(High)")
+        )
+      )
+    )
   );
 }
 
@@ -1049,14 +2344,13 @@ function App(){
   function deleteFirm(id){setFirms(function(p){return p.filter(function(f){return f.id!==id})});setTrades(function(p){return p.map(function(t){return Object.assign({},t,{firmIds:(t.firmIds||[]).filter(function(x){return x!==id})})})})}
 
   var syncColor=syncStatus==="synced"?"#34d399":syncStatus==="syncing"?"#f0a500":syncStatus==="error"?"#ff4444":"#444";
-  var navItems=[{id:"journal",l:"Journal"},{id:"calendar",l:"Calendar"},{id:"firms",l:"Accounts"},{id:"rules",l:"Rules"},{id:"news",l:"News"},{id:"new",l:"+ Trade"}];
-
+	var navItems=[{id:"journal",l:"Journal"},{id:"calendar",l:"Calendar"},{id:"firms",l:"Accounts"},{id:"rules",l:"Rules"},{id:"news",l:"News"},{id:"performance",l:"Performance"},{id:"reports",l:"Reports"},{id:"new",l:"+ Trade"}];
   return h("div",{style:{minHeight:"100vh",background:"#070707"}},
     h("div",{style:{position:"sticky",top:0,zIndex:50,background:"rgba(7,7,7,.97)",backdropFilter:"blur(14px)",borderBottom:"1px solid #111"}},
       h("div",{style:{maxWidth:720,margin:"0 auto",padding:"9px 13px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:7,flexWrap:"wrap"}},
         h("div",null,
           h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:8,letterSpacing:4,color:"#c8f135",textTransform:"uppercase",marginBottom:1}},"NBS Trading"),
-          h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:1,color:"white",lineHeight:1}},"Trade Journal v11")
+          h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:1,color:"white",lineHeight:1}},"Trade Journal v12")
         ),
         h("div",{style:{display:"flex",gap:3,flexWrap:"wrap",alignItems:"center"}},
           navItems.map(function(n){return h("button",{key:n.id,onClick:function(){setPage(n.id)},style:Object.assign({},BS,{padding:"6px 10px",fontSize:10,background:page===n.id?(n.id==="new"?"rgba(200,241,53,.12)":"#171717"):"none",border:"1px solid "+(page===n.id?(n.id==="new"?"rgba(200,241,53,.25)":"#252525"):"transparent"),color:page===n.id?(n.id==="new"?"#c8f135":"white"):"#555"})},n.l)}),
@@ -1084,7 +2378,9 @@ function App(){
       page==="calendar"&&h("div",{className:"fade"},h(CalendarView,{trades:trades})),
       page==="firms"&&h(FirmsPage,{firms:firms,trades:trades,onUpdate:updateFirm,onDelete:deleteFirm,onAdd:addFirm,onReorder:function(arr){setFirms(arr)},onUpdateTrade:updateTrade,onDeleteTrade:deleteTrade}),
       page==="rules"&&h(RulesPage,{rules:rules,onUpdate:function(r){setRules(r)}}),
-      page==="news"&&h(ForexNews,null)
+      page==="news"&&h(ForexNews,null),
+		page==="performance"&&h(PerformancePage,{trades:trades,firms:firms}),
+		page==="reports"&&h(ReportsPage,{trades:trades,firms:firms})
     )
   );
 }
@@ -1093,4 +2389,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(h(App,null));
 })();
 </script>
 </body>
-</html>
+</html> 
