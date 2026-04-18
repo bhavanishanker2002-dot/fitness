@@ -8,6 +8,24 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script>
+(function(){
+  function tryLoad(urls,i){
+    if(i>=urls.length)return;
+    var s=document.createElement("script");
+    s.src=urls[i];
+    s.onload=function(){if(!window.docx)tryLoad(urls,i+1);};
+    s.onerror=function(){tryLoad(urls,i+1);};
+    document.head.appendChild(s);
+  }
+  tryLoad([
+    "https://unpkg.com/docx@8.5.0/build/index.js",
+    "https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/docx/8.5.0/index.min.js"
+  ],0);
+})();
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -119,7 +137,25 @@ var DEF_RULES=[
 // ── HELPERS ──
 var MN={fontFamily:"'DM Mono',monospace"};
 function nowTs(){return new Date().toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}).replace(","," —")}
-function scoreEntry(f){return[f.c1,f.c2,f.c3,f.c4,f.c5,f.c6,f.c7,f.c8].filter(Boolean).length}
+var CORE_CHECKS=[
+  {id:"c1",label:"HTF bias confirmed (Daily/Weekly)",sub:"direction clear"},
+  {id:"c2",label:"Break of Structure on H4",sub:"valid BOS, not fake-out"},
+  {id:"c3",label:"Clean retracement into zone",sub:"orderly, not spike"},
+  {id:"c4",label:"Price is AT the zone",sub:""},
+  {id:"c5",label:"1st 4H candle closed",sub:"full close, not mid-candle"},
+  {id:"c6",label:"2nd 4H candle closed",sub:"your rule: 2 full 4H closes"},
+  {id:"c7",label:"No high-impact news next 4h",sub:"check forexfactory"},
+  {id:"c8",label:"Market is TRENDING",sub:"range = skip"}
+];
+function scoreEntry(f,hiddenIds,customIds){
+  var coreIds=["c1","c2","c3","c4","c5","c6","c7","c8"];
+  var visibleCore=coreIds.filter(function(id){return (hiddenIds||[]).indexOf(id)===-1});
+  var coreOn=visibleCore.filter(function(id){return !!f[id]}).length;
+  var cIds=customIds||[];
+  var custOn=cIds.filter(function(id){return f.cust&&f.cust[id]}).length;
+  return {score:coreOn+custOn,max:visibleCore.length+cIds.length};
+}
+function scoreEntryLegacy(f){return[f.c1,f.c2,f.c3,f.c4,f.c5,f.c6,f.c7,f.c8].filter(Boolean).length}
 function pipSz(p){return p&&p.toUpperCase().includes("JPY")?0.01:0.0001}
 function pipVal(p,price){return p&&p.toUpperCase().includes("JPY")?1000/(price||150):10}
 function calcLots(pair,entry,sl,riskPct,acct){
@@ -544,11 +580,13 @@ function Chk(props){
   );
 }
 function ScoreBadge(props){
-  var l=props.score>=7?"✅  A+ TAKE IT":props.score>=5?"⚠️  BORDERLINE":"❌  DO NOT ENTER";
-  var c=props.score>=7?"#34d399":props.score>=5?"#f0a500":"#ff4444";
+  var mx=(props.max==null?8:props.max)||1;
+  var pct=props.score/mx;
+  var l=pct>=0.87?"✅  A+ TAKE IT":pct>=0.60?"⚠️  BORDERLINE":"❌  DO NOT ENTER";
+  var c=pct>=0.87?"#34d399":pct>=0.60?"#f0a500":"#ff4444";
   return h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 15px",borderRadius:7,background:c+"10",border:"1px solid "+c+"33"}},
     h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,letterSpacing:2,color:c}},l),
-    h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:21,fontWeight:"bold",color:c}},props.score+"/8")
+    h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:21,fontWeight:"bold",color:c}},props.score+"/"+mx)
   );
 }
 function Photo(props){
@@ -727,7 +765,7 @@ function TradeCard(props){
   var openState=useState(false);var open=openState[0],setOpen=openState[1];
   var editState=useState(false);var editOut=editState[0],setEditOut=editState[1];
   var res=firmId!=null?getAccRes(trade,firmId):getCanonicalRes(trade);
-  var score=scoreEntry(trade);
+  var score=scoreEntryLegacy(trade);
   var hasOutcome=res.outcome&&!res.outcome.includes("Running");
   var firmNames=(trade.firmIds||[]).map(function(id){var f=firms.find(function(x){return x.id===id});return f?f.name:null}).filter(Boolean);
   var firm=firmId!=null?firms.find(function(f){return f.id===firmId}):null;
@@ -1106,12 +1144,24 @@ function FirmsPage(props){
 // ── NEW TRADE FORM ──
 function NewTradeForm(props){
   var onSave=props.onSave,onCancel=props.onCancel,firms=props.firms,trades=props.trades||[];
-  var blank={timestamp:"",setupType:"",confidence:"",pair:"",direction:"",session:"",marketRegime:"",entry:"",sl:"",tp:"",lots:"",riskPct:"1",accountSize:"100000",firmIds:[],c1:false,c2:false,c3:false,c4:false,c5:false,c6:false,c7:false,c8:false,newsPresent:"no",newsType:"",newsAction:"",beforeNotes:"",photoBefore:""};
+  var blank={timestamp:"",setupType:"",confidence:"",pair:"",direction:"",session:"",marketRegime:"",entry:"",sl:"",tp:"",lots:"",riskPct:"1",accountSize:"100000",firmIds:[],c1:false,c2:false,c3:false,c4:false,c5:false,c6:false,c7:false,c8:false,cust:{},newsPresent:"no",newsType:"",newsAction:"",beforeNotes:"",photoBefore:""};
   var fState=useState(blank);var f=fState[0],setF=fState[1];
   var sv=function(k){return function(v){setF(function(p){return Object.assign({},p,{[k]:v})})}};
   var se=function(k){return function(e){setF(function(p){return Object.assign({},p,{[k]:e.target.value})})}};
+  var svCust=function(id){return function(v){setF(function(p){var nc=Object.assign({},p.cust||{});nc[id]=v;return Object.assign({},p,{cust:nc})})}};
   var rr=calcRR(f.entry,f.sl,f.tp,f.direction);
-  var score=scoreEntry(f);
+  var hcState=useState(function(){try{return JSON.parse(localStorage.getItem("nbs9_hidden_checks"))||[]}catch(e){return []}});
+  var hiddenChecks=hcState[0],setHiddenChecks=hcState[1];
+  useEffect(function(){localStorage.setItem("nbs9_hidden_checks",JSON.stringify(hiddenChecks))},[hiddenChecks]);
+  var ccState=useState(function(){try{return JSON.parse(localStorage.getItem("nbs9_custom_checks"))||[]}catch(e){return []}});
+  var customChecks=ccState[0],setCustomChecks=ccState[1];
+  useEffect(function(){localStorage.setItem("nbs9_custom_checks",JSON.stringify(customChecks))},[customChecks]);
+  var adState=useState(false);var showAdd=adState[0],setShowAdd=adState[1];
+  var nlState=useState("");var newLabel=nlState[0],setNewLabel=nlState[1];
+  var nsState=useState("");var newSub=nsState[0],setNewSub=nsState[1];
+  var nwState=useState(false);var newWarn=nwState[0],setNewWarn=nwState[1];
+  var sObj=scoreEntry(f,hiddenChecks,customChecks.map(function(c){return c.id}));
+  var score=sObj.score,scoreMax=sObj.max,scorePct=scoreMax>0?score/scoreMax:0;
 
   useEffect(function(){
     var bal=f.firmIds.length>0
@@ -1127,7 +1177,29 @@ function NewTradeForm(props){
   }
   function selectFirm(firmId){var firm2=firms.find(function(x){return String(x.id)===firmId});if(!firm2)return;var bal=currentBal(firm2);setF(function(p){return Object.assign({},p,{accountSize:String(Math.round(bal*100)/100),firmIds:p.firmIds.includes(firm2.id)?p.firmIds:[].concat(p.firmIds,[firm2.id])})})}
   function toggleFirm(id){setF(function(p){return Object.assign({},p,{firmIds:p.firmIds.includes(id)?p.firmIds.filter(function(x){return x!==id}):[].concat(p.firmIds,[id])})})}
-  function handleSave(){if(!f.pair||!f.direction||!f.entry||!f.sl){alert("Fill pair, direction, entry and SL.");return}if(!f.timestamp){alert("Please enter a trade date & time.");return}if(score<5&&!window.confirm("Score "+score+"/8 — below rules. Log anyway?"))return;onSave(Object.assign({},f,{rr:rr,id:Date.now(),timestamp:f.timestamp,accountResults:{}}))}
+  function handleSave(){
+    if(!f.pair||!f.direction||!f.entry||!f.sl){alert("Fill pair, direction, entry and SL.");return}
+    if(!f.timestamp){alert("Please enter a trade date & time.");return}
+    if(scorePct<0.60&&!window.confirm("Score "+score+"/"+scoreMax+" — below rules. Log anyway?"))return;
+    var snap=customChecks.map(function(c){return {id:c.id,label:c.label,sub:c.sub,warn:!!c.warn}});
+    onSave(Object.assign({},f,{rr:rr,id:Date.now(),timestamp:f.timestamp,accountResults:{},customChecks:Object.assign({},f.cust||{}),customChecksSnapshot:snap}));
+  }
+  function addCustomCheck(){
+    var lbl=(newLabel||"").trim().slice(0,80);
+    if(!lbl){alert("Label is required.");return}
+    var item={id:"cst_"+Date.now(),label:lbl,sub:(newSub||"").trim().slice(0,80),warn:!!newWarn};
+    setCustomChecks(function(p){return p.concat([item])});
+    setNewLabel("");setNewSub("");setNewWarn(false);setShowAdd(false);
+  }
+  function removeCoreCheck(id){
+    if(window.confirm("Remove this checklist item? You can restore defaults below."))
+      setHiddenChecks(function(p){return p.indexOf(id)===-1?p.concat([id]):p});
+  }
+  function removeCustomCheck(id){
+    if(window.confirm("Remove this checklist item?"))
+      setCustomChecks(function(p){return p.filter(function(c){return c.id!==id})});
+  }
+  var rmBtnStyle={position:"absolute",top:6,right:6,background:"rgba(0,0,0,.55)",border:"1px solid #2a2a2a",color:"#666",padding:"1px 6px",borderRadius:3,fontSize:10,fontFamily:"'DM Mono',monospace",cursor:"pointer",zIndex:2};
 
   var C={lime:"#c8f135",sky:"#38bdf8",emerald:"#34d399",amber:"#f0a500",violet:"#a78bfa"};
   return h("div",{style:{display:"flex",flexDirection:"column",gap:15,paddingBottom:40},className:"fade"},
@@ -1169,15 +1241,33 @@ function NewTradeForm(props){
     ),
     h("div",{style:{borderLeft:"2px solid "+C.emerald,paddingLeft:12,display:"flex",flexDirection:"column",gap:7}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:C.emerald,textTransform:"uppercase"}},"04 — Checklist"),
-      h(Chk,{label:"HTF bias confirmed (Daily/Weekly)",sub:"direction clear",checked:f.c1,onChange:sv("c1")}),
-      h(Chk,{label:"Break of Structure on H4",sub:"valid BOS, not fake-out",checked:f.c2,onChange:sv("c2")}),
-      h(Chk,{label:"Clean retracement into zone",sub:"orderly, not spike",checked:f.c3,onChange:sv("c3")}),
-      h(Chk,{label:"Price is AT the zone",checked:f.c4,onChange:sv("c4")}),
-      h(Chk,{label:"1st 4H candle closed",sub:"full close, not mid-candle",checked:f.c5,onChange:sv("c5")}),
-      h(Chk,{label:"2nd 4H candle closed",sub:"your rule: 2 full 4H closes",checked:f.c6,onChange:sv("c6")}),
-      h(Chk,{label:"No high-impact news next 4h",sub:"check forexfactory",checked:f.c7,onChange:sv("c7")}),
-      h(Chk,{label:"Market is TRENDING",sub:"range = skip",checked:f.c8,onChange:sv("c8")}),
-      h(ScoreBadge,{score:score})
+      CORE_CHECKS.filter(function(cd){return hiddenChecks.indexOf(cd.id)===-1}).map(function(cd){
+        return h("div",{key:cd.id,style:{position:"relative"}},
+          h(Chk,{label:cd.label,sub:cd.sub||undefined,checked:!!f[cd.id],onChange:sv(cd.id)}),
+          h("button",{onClick:function(e){e.stopPropagation();removeCoreCheck(cd.id)},style:rmBtnStyle,title:"Remove from checklist"},"✕")
+        );
+      }),
+      customChecks.map(function(cc){
+        return h("div",{key:cc.id,style:{position:"relative"}},
+          h(Chk,{label:cc.label,sub:cc.sub||undefined,warn:!!cc.warn,checked:!!(f.cust&&f.cust[cc.id]),onChange:svCust(cc.id)}),
+          h("button",{onClick:function(e){e.stopPropagation();removeCustomCheck(cc.id)},style:rmBtnStyle,title:"Remove custom check"},"✕")
+        );
+      }),
+      !showAdd && h("button",{onClick:function(){setShowAdd(true)},style:Object.assign({},BS,{alignSelf:"flex-start",padding:"7px 12px",fontSize:10,background:"rgba(52,211,153,.05)",border:"1px dashed rgba(52,211,153,.25)",color:"#34d399"})},"+ Add Check"),
+      showAdd && h("div",{style:{background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:7,padding:12,display:"flex",flexDirection:"column",gap:8}},
+        h(I,{label:"Checklist item label (max 80)",value:newLabel,onChange:function(e){setNewLabel(e.target.value.slice(0,80))},placeholder:"e.g. Equity > weekly high"}),
+        h(I,{label:"Sub-label / note (optional, max 80)",value:newSub,onChange:function(e){setNewSub(e.target.value.slice(0,80))},placeholder:"e.g. confirm on close"}),
+        h("label",{style:{display:"flex",alignItems:"center",gap:8,fontFamily:"'DM Mono',monospace",fontSize:11,color:"#888",cursor:"pointer"}},
+          h("input",{type:"checkbox",checked:newWarn,onChange:function(e){setNewWarn(e.target.checked)}}),
+          "Warn if unchecked (red styling)"
+        ),
+        h("div",{style:{display:"flex",gap:7}},
+          h("button",{onClick:addCustomCheck,style:Object.assign({},BS,{flex:1,padding:"9px 0",fontSize:11,background:"rgba(52,211,153,.09)",border:"1px solid rgba(52,211,153,.25)",color:"#34d399"})},"Save"),
+          h("button",{onClick:function(){setShowAdd(false);setNewLabel("");setNewSub("");setNewWarn(false)},style:Object.assign({},BS,{padding:"9px 14px",fontSize:11,background:"none",border:"1px solid #252525",color:"#666"})},"Cancel")
+        )
+      ),
+      hiddenChecks.length>0 && h("button",{onClick:function(){setHiddenChecks([])},style:{background:"none",border:"none",color:"#555",fontSize:10,fontFamily:"'DM Mono',monospace",cursor:"pointer",textDecoration:"underline",alignSelf:"flex-start",padding:0,marginTop:2}},"Restore "+hiddenChecks.length+" hidden default check"+(hiddenChecks.length===1?"":"s")),
+      h(ScoreBadge,{score:score,max:scoreMax})
     ),
     h("div",{style:{borderLeft:"2px solid "+C.amber,paddingLeft:12,display:"flex",flexDirection:"column",gap:8}},
       h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:C.amber,textTransform:"uppercase"}},"05 — News"),
@@ -1185,7 +1275,7 @@ function NewTradeForm(props){
       f.newsPresent==="yes"&&h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},h(Se,{label:"News Type",value:f.newsType,onChange:sv("newsType"),options:NEWS_TYPES}),h(Se,{label:"Action",value:f.newsAction,onChange:sv("newsAction"),options:["Close 30min before","Reduce size 50%","Skip trade","Hold — SL handles it"]})),
       f.newsPresent==="yes"&&h("div",{style:{background:"rgba(240,165,0,.04)",border:"1px solid rgba(240,165,0,.12)",borderRadius:7,padding:10,fontFamily:"'DM Mono',monospace",fontSize:11,color:"rgba(240,165,0,.75)",lineHeight:1.7}},"⚠ NFP/FOMC/CPI: close 30min before if in profit. Loss: let SL handle.")
     ),
-    score<6&&h("div",{style:{padding:10,borderRadius:7,background:"rgba(255,68,68,.05)",border:"1px solid rgba(255,68,68,.12)",fontFamily:"'DM Mono',monospace",fontSize:11,color:"rgba(255,68,68,.8)"}},"⚠ Score "+score+"/8 — "+(score>=5?"borderline":"DO NOT TAKE THIS TRADE")),
+    scorePct<0.75&&h("div",{style:{padding:10,borderRadius:7,background:"rgba(255,68,68,.05)",border:"1px solid rgba(255,68,68,.12)",fontFamily:"'DM Mono',monospace",fontSize:11,color:"rgba(255,68,68,.8)"}},"⚠ Score "+score+"/"+scoreMax+" — "+(scorePct>=0.60?"borderline":"DO NOT TAKE THIS TRADE")),
     h("div",{style:{display:"flex",gap:7}},
       h("button",{onClick:handleSave,style:Object.assign({},BS,{flex:1,padding:"13px 0",fontSize:12,background:"rgba(200,241,53,.08)",border:"1px solid rgba(200,241,53,.2)",color:"#c8f135"})},"Log Trade"),
       h("button",{onClick:onCancel,style:Object.assign({},BS,{padding:"13px 14px",background:"none",border:"1px solid #1e1e1e",color:"#555"})},"Cancel")
@@ -1356,12 +1446,14 @@ function CloudSetup(props){
       ),
       step==="new"&&h("div",{className:"fade"},
         h("div",{style:Object.assign({},card,{cursor:"default"})},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,color:"#888",lineHeight:1.8}},"github.com → Settings → Developer settings → Personal access tokens → tick gist → Generate"),h("input",{value:token,onChange:function(e){setToken(e.target.value)},placeholder:"Paste token (ghp_...)",style:inp})),
+        h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#666",lineHeight:1.7,marginBottom:10,padding:"10px 12px",border:"1px solid #1a1a1a",borderRadius:6,background:"#0a0a0a"}},"ℹ Security note: Your GitHub token is stored in your browser's localStorage. Anyone with physical access to this device and browser can see it in DevTools. To protect it: use a token with ONLY 'gist' scope (no other permissions), and revoke it at github.com/settings/tokens if this device is ever compromised. The source code being visible in DevTools is normal for all web apps."),
         err&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:"#ff8888",padding:"8px 10px",background:"rgba(255,68,68,.06)",borderRadius:5,marginBottom:10}},err),
         h("button",{onClick:createNew,disabled:loading,style:Object.assign({},BS,{width:"100%",padding:"14px",fontSize:12,marginTop:10,background:"rgba(200,241,53,.1)",color:"#c8f135",border:"1px solid rgba(200,241,53,.2)"})},loading?"Creating...":"Create Gist"),
         h("button",{onClick:function(){setStep("intro");setErr("")},style:Object.assign({},BS,{width:"100%",padding:"14px",fontSize:12,marginTop:8,background:"none",border:"1px solid #1e1e1e",color:"#555"})},"Back")
       ),
       step==="existing"&&h("div",{className:"fade"},
         h("div",{style:Object.assign({},card,{cursor:"default"})},h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,color:"#888",marginBottom:4}},"Token:"),h("input",{value:token,onChange:function(e){setToken(e.target.value)},placeholder:"ghp_...",style:inp}),h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,color:"#888",marginTop:12,marginBottom:4}},"Gist ID:"),h("input",{value:gistId,onChange:function(e){setGistId(e.target.value)},placeholder:"e.g. a1b2c3d4e5f67890",style:Object.assign({},inp,{marginTop:0})})),
+        h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#666",lineHeight:1.7,marginBottom:10,padding:"10px 12px",border:"1px solid #1a1a1a",borderRadius:6,background:"#0a0a0a"}},"ℹ Security note: Your GitHub token is stored in your browser's localStorage. Anyone with physical access to this device and browser can see it in DevTools. To protect it: use a token with ONLY 'gist' scope (no other permissions), and revoke it at github.com/settings/tokens if this device is ever compromised. The source code being visible in DevTools is normal for all web apps."),
         err&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:12,color:"#ff8888",padding:"8px 10px",background:"rgba(255,68,68,.06)",borderRadius:5,marginBottom:10}},err),
         h("button",{onClick:connectExisting,disabled:loading,style:Object.assign({},BS,{width:"100%",padding:"14px",fontSize:12,marginTop:10,background:"rgba(56,189,248,.1)",color:"#38bdf8",border:"1px solid rgba(56,189,248,.2)"})},loading?"Connecting...":"Connect & Load"),
         h("button",{onClick:function(){setStep("intro");setErr("")},style:Object.assign({},BS,{width:"100%",padding:"14px",fontSize:12,marginTop:8,background:"none",border:"1px solid #1e1e1e",color:"#555"})},"Back")
@@ -1388,6 +1480,17 @@ function StatsBar(props){
   );
 }
 
+
+// ── SECURITY BANNER ──
+function SecurityBanner(){
+  var dState=useState(function(){return localStorage.getItem("nbs9_security_notice_dismissed")==="1"});
+  var dismissed=dState[0],setDismissed=dState[1];
+  if(dismissed)return null;
+  return h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:10,color:"#888",lineHeight:1.6,padding:"10px 12px",marginBottom:10,border:"1px solid #1e1e1e",borderRadius:7,background:"#0a0a0a",display:"flex",gap:10,alignItems:"flex-start"}},
+    h("div",{style:{flex:1}},"🔒 Your data is stored locally in this browser. GitHub token has gist scope only. Source code visible in DevTools is normal — no server, no external data collection."),
+    h("button",{onClick:function(){localStorage.setItem("nbs9_security_notice_dismissed","1");setDismissed(true)},style:Object.assign({},BS,{padding:"4px 10px",fontSize:9,background:"none",border:"1px solid #252525",color:"#888"})},"Dismiss")
+  );
+}
 
 // ── REPORTS ──
 // ── REACT COMPONENTS ──
@@ -1419,13 +1522,13 @@ function PdfPreviewModal(props){
 function ReportsPage(props){
   var trades=props.trades||[];
   var firms=props.firms||[];
-  var tabState=useState("factsheet");var tab=tabState[0],setTab=tabState[1];
+  var tabState=useState("builder");var tab=tabState[0],setTab=tabState[1];
   var accState=useState("all");var selAccId=accState[0],setSelAccId=accState[1];
   var selFirm=selAccId!=="all"?firms.find(function(f){return String(f.id)===selAccId}):null;
   var firmId=selFirm?selFirm.id:null;
   var acctSize=selFirm?selFirm.accountSize:null;
   return h("div",{className:"fade"},
-    h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}},
+    (tab!=="builder")&&h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}},
       h("div",{style:Object.assign({},LB,{marginRight:4})},"Account"),
       h("select",{value:selAccId,onChange:function(e){setSelAccId(e.target.value);},style:Object.assign({},IS,{width:"auto",minWidth:200,fontSize:11})},
         h("option",{value:"all"},"All / Fund View"),
@@ -1434,10 +1537,12 @@ function ReportsPage(props){
       selFirm&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:selFirm.color}},selFirm.name)
     ),
     h("div",{style:{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}},
-      [["factsheet","Monthly Factsheet"],["letter","Investor Letter"],["risk","Quarterly Risk"],["accrpt","Account Reports"]].map(function(x){
-        return h("button",{key:x[0],onClick:function(){setTab(x[0])},style:Object.assign({},BS,{padding:"7px 13px",fontSize:10,background:tab===x[0]?"#171717":"none",border:"1px solid "+(tab===x[0]?"#252525":"#131313"),color:tab===x[0]?"white":"#666"})},x[1]);
+      [["builder","Report Builder"],["factsheet","Monthly Factsheet"],["letter","Investor Letter"],["risk","Quarterly Risk"],["accrpt","Account Reports"]].map(function(x){
+        var isGold=(x[0]==="builder");
+        return h("button",{key:x[0],onClick:function(){setTab(x[0])},style:Object.assign({},BS,{padding:"7px 13px",fontSize:10,background:tab===x[0]?(isGold?"rgba(201,162,39,.15)":"#171717"):"none",border:"1px solid "+(tab===x[0]?(isGold?"rgba(201,162,39,.4)":"#252525"):"#131313"),color:tab===x[0]?(isGold?"#c9a227":"white"):"#666"})},x[1]);
       })
     ),
+    tab==="builder"&&h(ReportBuilderPage,{trades:trades,firms:firms}),
     tab==="factsheet"&&h(ReportsFactsheet,{trades:trades,firmId:firmId,acctSize:acctSize,selFirm:selFirm}),
     tab==="letter"&&h(ReportsLetter,{trades:trades,firmId:firmId,acctSize:acctSize,selFirm:selFirm}),
     tab==="risk"&&h(ReportsRisk,{trades:trades,firmId:firmId,acctSize:acctSize,selFirm:selFirm}),
@@ -2291,6 +2396,1806 @@ function PerformancePage(props){
 }
 
 // ── MAIN APP ──
+// ── NGC REPORTS ──────────────────────────────────────────────────────────────
+// ── REPORT BUILDER (UI-driven .docx with user inputs) ──
+var RB_PAIRS=["EUR/USD","GBP/USD","USD/JPY"];
+
+function rbFmtDate(d){if(!d)return"[DATE]";return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}
+function rbMondayOfWeek(d){var t=new Date(d);t.setHours(0,0,0,0);var dow=t.getDay()||7;t.setDate(t.getDate()+1-dow);return t}
+function rbThisMonday(){return rbMondayOfWeek(new Date())}
+function rbAddD(d,n){var r=new Date(d);r.setDate(r.getDate()+n);return r}
+function rbMonthStart(offset){var d=new Date();d.setDate(1);d.setHours(0,0,0,0);d.setMonth(d.getMonth()+offset);return d}
+function rbBiweekStart(){var d=new Date();return d.getDate()<=15?new Date(d.getFullYear(),d.getMonth(),1):new Date(d.getFullYear(),d.getMonth(),16)}
+function rbBiweekEnd(){var d=new Date();return d.getDate()<=15?new Date(d.getFullYear(),d.getMonth(),15):new Date(d.getFullYear(),d.getMonth()+1,0)}
+function rbTradesInRange(trades,s,e){
+  // Include a trade if it was entered before period ends AND (still running OR closed after period starts)
+  return trades.filter(function(t){
+    var entryD=parseDate(t.timestamp);
+    if(!entryD)return false;
+    if(entryD>e)return false; // entered after period ends — exclude
+    // Include if entered on or before end of period
+    return true;
+  });
+}
+function rbClosedIn(tArr){return tArr.filter(function(t){var r=getCanonicalRes(t);return r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null&&!isNaN(parseFloat(r.actualPct))})}
+function rbWinRate(tArr){var cl=rbClosedIn(tArr);if(!cl.length)return 0;var w=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0});return Math.round(w.length/cl.length*100)}
+function rbNetR(tArr){var cl=rbClosedIn(tArr);return cl.reduce(function(s,t){var rp=parseFloat(t.riskPct||1),ap=parseFloat(getCanonicalRes(t).actualPct||0);return s+(rp>0?ap/rp:0)},0)}
+function rbNetPct(tArr){return rbClosedIn(tArr).reduce(function(s,t){return s+(parseFloat(getCanonicalRes(t).actualPct)||0)},0)}
+function rbFmtR(n){return(n>=0?"+":"")+n.toFixed(2)+"R"}
+function rbFmtPct(n){return(n>=0?"+":"")+n.toFixed(2)+"%"}
+function fv(u,k,fb){var v=u&&u[k];return (v!==undefined&&v!==null&&String(v).trim()!=="")?String(v):(fb||"[___]")}
+
+// Report field schema — drives both the UI form AND the docx rendering
+var REPORT_FIELDS={
+  weeklyPlanning:{
+    title:"WEEKLY PLANNING REPORT",
+    subtitle:"Pre-Week Intelligence Brief — Written Every Sunday",
+    filename:"NGC_Weekly_Planning",
+    period:"week",
+    sections:[
+      {title:"I. Market Index Tracker",fields:[
+        {key:"idxDxyBias",label:"DXY Index — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxDxyLevel",label:"DXY Index — Key Level",kind:"text"},
+        {key:"idxDxyNotes",label:"DXY Index — Notes",kind:"text"},
+        {key:"idxEurBias",label:"EUR Index (Euro strength) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxEurLevel",label:"EUR Index — Key Level",kind:"text"},
+        {key:"idxEurNotes",label:"EUR Index — Notes",kind:"text"},
+        {key:"idxGbpBias",label:"GBP Index (Pound strength) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxGbpLevel",label:"GBP Index — Key Level",kind:"text"},
+        {key:"idxGbpNotes",label:"GBP Index — Notes",kind:"text"},
+        {key:"idxJpyBias",label:"JPY Index (Yen strength) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxJpyLevel",label:"JPY Index — Key Level",kind:"text"},
+        {key:"idxJpyNotes",label:"JPY Index — Notes",kind:"text"},
+        {key:"idxOilBias",label:"Oil (WTI/Brent) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxOilLevel",label:"Oil — Key Level",kind:"text"},
+        {key:"idxOilNotes",label:"Oil — FX Implication",kind:"text"},
+      ]},
+      {title:"II. Central Bank Policy",fields:[
+        {key:"fedStance",label:"Federal Reserve",kind:"select",options:["Hiking — hawkish","Pausing — neutral","Cutting — dovish"]},
+        {key:"boeStance",label:"Bank of England",kind:"select",options:["Hiking — hawkish","Pausing — neutral","Cutting — dovish"]},
+        {key:"bojStance",label:"Bank of Japan",kind:"select",options:["Ultra-loose","Normalising","Hiking","Intervention risk"]},
+        {key:"cbDivergence",label:"Key CB Divergence",kind:"textarea",rows:2},
+      ]},
+      {title:"III. COT Positioning",fields:[
+        {key:"cotEur",label:"EUR/USD COT",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+        {key:"cotGbp",label:"GBP/USD COT",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+        {key:"cotJpy",label:"USD/JPY COT",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+      ]},
+      {title:"IV. Capital Flows / Seasonality",fields:[
+        {key:"riskEnv",label:"Risk Environment",kind:"select",options:["Risk-ON","Risk-OFF","Mixed"]},
+        {key:"seasonality",label:"Seasonality (this month)",kind:"text"},
+      ]},
+      {title:"V. HTF Structure — EUR/USD",fields:[
+        {key:"eurTrend",label:"Weekly Trend",kind:"select",options:["Uptrend","Downtrend","Ranging"]},
+        {key:"eurZone",label:"Active Zone (top/bottom)",kind:"text"},
+        {key:"eurBOS",label:"BOS Confirmed?",kind:"select",options:["Yes","Waiting","No"]},
+      ]},
+      {title:"VI. HTF Structure — GBP/USD",fields:[
+        {key:"gbpTrend",label:"Weekly Trend",kind:"select",options:["Uptrend","Downtrend","Ranging"]},
+        {key:"gbpZone",label:"Active Zone (top/bottom)",kind:"text"},
+        {key:"gbpBOS",label:"BOS Confirmed?",kind:"select",options:["Yes","Waiting","No"]},
+      ]},
+      {title:"VII. HTF Structure — USD/JPY",fields:[
+        {key:"jpyTrend",label:"Weekly Trend",kind:"select",options:["Uptrend","Downtrend","Ranging"]},
+        {key:"jpyZone",label:"Active Zone (top/bottom)",kind:"text"},
+        {key:"jpyBOS",label:"BOS Confirmed?",kind:"select",options:["Yes","Waiting","No"]},
+      ]},
+      {title:"VIII. Trade Plans",fields:[
+        {key:"eurPlan",label:"EUR/USD Plan",kind:"textarea",rows:3},
+        {key:"gbpPlan",label:"GBP/USD Plan",kind:"textarea",rows:3},
+        {key:"jpyPlan",label:"USD/JPY Plan",kind:"textarea",rows:3},
+      ]},
+      {title:"IX. Weekly Game Plan Narrative",fields:[
+        {key:"gamePlan",label:"Weekly Narrative (the one story for the week)",kind:"textarea",rows:5},
+      ]},
+    ]
+  },
+  weeklyReview:{
+    title:"WEEKLY REVIEW REPORT",
+    subtitle:"Post-Week Debrief — Written Every Friday/Saturday",
+    filename:"NGC_Weekly_Review",
+    period:"lastWeek",
+    includeTradeLog:true,
+    includeTradeDebrief:true,
+    sections:[
+      {title:"Market Read Accuracy",fields:[
+        {key:"macroEur",label:"EUR/USD — bias called vs. actual",kind:"text"},
+        {key:"macroGbp",label:"GBP/USD — bias called vs. actual",kind:"text"},
+        {key:"macroJpy",label:"USD/JPY — bias called vs. actual",kind:"text"},
+      ]},
+      {title:"Behavioural / Rules",fields:[
+        {key:"rulesCompliance",label:"Rules compliance summary",kind:"textarea",rows:3},
+        {key:"behaviour",label:"Behavioural patterns observed this week",kind:"textarea",rows:3},
+        {key:"ruleViolations",label:"Rule violations (free text)",kind:"textarea",rows:2},
+      ]},
+      {title:"Forward Notes",fields:[
+        {key:"biggestLesson",label:"Biggest lesson this week",kind:"textarea",rows:2},
+        {key:"oneWin",label:"One discipline win",kind:"textarea",rows:2},
+        {key:"oneFix",label:"One thing to fix next week",kind:"textarea",rows:2},
+        {key:"carryOver",label:"Open trades / carry-forward notes",kind:"textarea",rows:2},
+      ]},
+    ]
+  },
+  biweeklyPlanning:{
+    title:"BI-WEEKLY PLANNING REPORT",
+    subtitle:"Two-Week Macro Outlook — Written 1st & 15th",
+    filename:"NGC_Biweekly_Planning",
+    period:"biweek",
+    sections:[
+      {title:"I. Market Index Tracker — 2-Week View",fields:[
+        {key:"idxDxyBias",label:"DXY Index — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxDxyLevel",label:"DXY Index — Key Level",kind:"text"},
+        {key:"idxEurBias",label:"EUR Index (Euro strength) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxEurLevel",label:"EUR Index — Key Level",kind:"text"},
+        {key:"idxGbpBias",label:"GBP Index (Pound strength) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxGbpLevel",label:"GBP Index — Key Level",kind:"text"},
+        {key:"idxJpyBias",label:"JPY Index (Yen strength) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxJpyLevel",label:"JPY Index — Key Level",kind:"text"},
+        {key:"idxOilBias",label:"Oil (WTI/Brent) — Bias",kind:"select",options:["Bullish","Bearish","Neutral"]},
+        {key:"idxOilLevel",label:"Oil — Key Level",kind:"text"},
+        {key:"idxOilFxImpact",label:"Oil — FX Implication",kind:"text"},
+      ]},
+      {title:"II. Dominant Macro Theme",fields:[
+        {key:"theme",label:"2-week thesis (1 paragraph)",kind:"textarea",rows:4},
+      ]},
+      {title:"III. CB Policy Trajectory",fields:[
+        {key:"fedTraj",label:"Fed 2-week trajectory",kind:"textarea",rows:2},
+        {key:"boeTraj",label:"BOE 2-week trajectory",kind:"textarea",rows:2},
+        {key:"bojTraj",label:"BOJ 2-week trajectory",kind:"textarea",rows:2},
+      ]},
+      {title:"IV. COT Positioning (2-week view)",fields:[
+        {key:"cotEur",label:"EUR/USD COT Signal",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+        {key:"cotGbp",label:"GBP/USD COT Signal",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+        {key:"cotJpy",label:"USD/JPY COT Signal",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+      ]},
+      {title:"V. Setup Pipeline (2-week)",fields:[
+        {key:"eurSetup",label:"EUR/USD setup forming",kind:"textarea",rows:2},
+        {key:"gbpSetup",label:"GBP/USD setup forming",kind:"textarea",rows:2},
+        {key:"jpySetup",label:"USD/JPY setup forming",kind:"textarea",rows:2},
+      ]},
+      {title:"VI. Position Sizing & Plan",fields:[
+        {key:"sizingFramework",label:"Sizing framework (this period)",kind:"textarea",rows:2},
+        {key:"gamePlan",label:"2-week game plan",kind:"textarea",rows:4},
+        {key:"invalidation",label:"Thesis invalidation condition",kind:"textarea",rows:2},
+      ]},
+    ]
+  },
+  biweeklyReview:{
+    title:"BI-WEEKLY REVIEW REPORT",
+    subtitle:"Two-Week Performance Review",
+    filename:"NGC_Biweekly_Review",
+    period:"lastBiweek",
+    includeTradeLog:true,
+    includeTradeDebrief:true,
+    sections:[
+      {title:"Macro Thesis Accuracy",fields:[
+        {key:"macroAccuracy",label:"Macro thesis — what worked, what missed",kind:"textarea",rows:4},
+        {key:"cotAccuracy",label:"COT signal accuracy this period",kind:"textarea",rows:3},
+      ]},
+      {title:"Pattern & Psychology",fields:[
+        {key:"patternNotes",label:"Pattern analysis (day-of-week, pair, confluence)",kind:"textarea",rows:3},
+        {key:"psychNotes",label:"Psychological patterns observed",kind:"textarea",rows:3},
+      ]},
+      {title:"Forward Adjustments",fields:[
+        {key:"nextPeriodThesis",label:"Next period thesis (draft)",kind:"textarea",rows:3},
+        {key:"adjustments",label:"Adjustments for next period",kind:"textarea",rows:3},
+      ]},
+    ]
+  },
+  monthlyInvestor:{
+    title:"MONTHLY INVESTOR REPORT",
+    subtitle:"Institutional Monthly Report — Full Transparency",
+    filename:"NGC_Monthly_Investor",
+    period:"month",
+    includeTradeLog:true,
+    includeMonthlyHistory:true,
+    sections:[
+      {title:"Month at a Glance",fields:[
+        {key:"execSummary",label:"Executive summary (3-4 sentences)",kind:"textarea",rows:4},
+      ]},
+      {title:"Market Index Tracker — Monthly",fields:[
+        {key:"idxDxyMonthly",label:"DXY Index — Monthly Move & Level",kind:"text"},
+        {key:"idxEurMonthly",label:"EUR Index (Euro strength) — Monthly Move",kind:"text"},
+        {key:"idxGbpMonthly",label:"GBP Index (Pound strength) — Monthly Move",kind:"text"},
+        {key:"idxJpyMonthly",label:"JPY Index (Yen strength) — Monthly Move",kind:"text"},
+        {key:"idxOilMonthly",label:"Oil — Monthly Move & Level",kind:"text"},
+        {key:"idxOilFxCorr",label:"Oil → FX Correlation This Month",kind:"text"},
+      ]},
+      {title:"Market Environment",fields:[
+        {key:"marketEnv",label:"Market environment description",kind:"textarea",rows:4},
+        {key:"biggestEvent",label:"Biggest market event this month",kind:"textarea",rows:2},
+      ]},
+      {title:"Central Bank Actions",fields:[
+        {key:"fedAction",label:"Fed action / language shift",kind:"textarea",rows:2},
+        {key:"boeAction",label:"BOE action / language shift",kind:"textarea",rows:2},
+        {key:"bojAction",label:"BOJ action / intervention",kind:"textarea",rows:2},
+      ]},
+      {title:"Outlook & Investor Notes",fields:[
+        {key:"outlookNext",label:"Outlook for next month",kind:"textarea",rows:3},
+        {key:"investorNote",label:"Note to prospective investors (3 paragraphs)",kind:"textarea",rows:6},
+      ]},
+    ]
+  },
+  marketOutlook:{
+    title:"MARKET OUTLOOK REPORT",
+    subtitle:"Near-Term (1M) + Medium-Term (3-6M) Macro Thesis",
+    filename:"NGC_Market_Outlook",
+    period:"outlook",
+    sections:[
+      {title:"Market Index Tracker — Current Snapshot",fields:[
+        {key:"idxDxySnap",label:"DXY Index — Current Level & Bias",kind:"text"},
+        {key:"idxEurSnap",label:"EUR Index (Euro strength) — Level & Bias",kind:"text"},
+        {key:"idxGbpSnap",label:"GBP Index (Pound strength) — Level & Bias",kind:"text"},
+        {key:"idxJpySnap",label:"JPY Index (Yen strength) — Level & Bias",kind:"text"},
+        {key:"idxOilSnap",label:"Oil — Current Level & Bias",kind:"text"},
+        {key:"idxOilFxNote",label:"Oil — FX Implication",kind:"text"},
+      ]},
+      {title:"Part 1 — Near-Term (this month)",fields:[
+        {key:"nearTheme",label:"Dominant macro theme (1 paragraph)",kind:"textarea",rows:4},
+        {key:"fedNear",label:"Fed near-term expected action",kind:"textarea",rows:2},
+        {key:"boeNear",label:"BOE near-term expected action",kind:"textarea",rows:2},
+        {key:"bojNear",label:"BOJ near-term expected action",kind:"textarea",rows:2},
+      ]},
+      {title:"Near-Term COT",fields:[
+        {key:"cotNearEur",label:"EUR/USD near-term COT",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+        {key:"cotNearGbp",label:"GBP/USD near-term COT",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+        {key:"cotNearJpy",label:"USD/JPY near-term COT",kind:"select",options:["Bullish","Bearish","Neutral","SKIP"]},
+      ]},
+      {title:"Near-Term Pair Views",fields:[
+        {key:"pairEurNear",label:"EUR/USD 1-month view",kind:"textarea",rows:2},
+        {key:"pairGbpNear",label:"GBP/USD 1-month view",kind:"textarea",rows:2},
+        {key:"pairJpyNear",label:"USD/JPY 1-month view",kind:"textarea",rows:2},
+      ]},
+      {title:"Near-Term Invalidation",fields:[
+        {key:"invalNearEur",label:"EUR/USD thesis void if",kind:"textarea",rows:2},
+        {key:"invalNearGbp",label:"GBP/USD thesis void if",kind:"textarea",rows:2},
+        {key:"invalNearJpy",label:"USD/JPY thesis void if",kind:"textarea",rows:2},
+      ]},
+      {title:"Near-Term Game Plan",fields:[
+        {key:"nearPlan",label:"Near-term game plan narrative",kind:"textarea",rows:4},
+      ]},
+      {title:"Part 2 — Medium-Term (3-6 months)",fields:[
+        {key:"medTheme",label:"3-6 month thesis (1 paragraph)",kind:"textarea",rows:4},
+        {key:"rateCycle",label:"Global rate cycle — where are we?",kind:"textarea",rows:3},
+      ]},
+      {title:"Medium-Term Pair Views",fields:[
+        {key:"pairEurMed",label:"EUR/USD 3-6m view",kind:"textarea",rows:2},
+        {key:"pairGbpMed",label:"GBP/USD 3-6m view",kind:"textarea",rows:2},
+        {key:"pairJpyMed",label:"USD/JPY 3-6m view",kind:"textarea",rows:2},
+      ]},
+      {title:"Medium-Term Invalidation",fields:[
+        {key:"medInvalidation",label:"Structural invalidation triggers",kind:"textarea",rows:3},
+      ]},
+    ]
+  }
+};
+
+// Auto-populated tiles per report (read-only summary at top of form)
+function rbAutoTiles(rptKey,trades,firms,selFirm,rangeOverride){
+  var range=rbResolveRange(rptKey,rangeOverride);
+  // For period trades: entry date <= end of period (trade was entered by period end)
+  var tArr=rbTradesInRange(trades,range.start,range.end);
+  var cl=rbClosedIn(tArr);
+  // Also count trades open/running during the period
+  var openDuring=trades.filter(function(t){
+    var d=parseDate(t.timestamp);
+    if(!d||d>range.end)return false;
+    var r=getCanonicalRes(t);
+    return !r.outcome||r.outcome.indexOf("Running")>=0;
+  });
+  var wr=rbWinRate(tArr);
+  var nr=rbNetR(tArr);
+  var np=rbNetPct(tArr);
+  var openCount=openDuring.length;
+  var tiles=[
+    ["Period",rbFmtDate(range.start)+" — "+rbFmtDate(range.end)],
+    ["Closed in Period",String(cl.length)+" trades"],
+    ["Running / Open",String(openCount)],
+    ["Win Rate (closed)",cl.length?wr+"%":"—"],
+    ["Net R (closed)",cl.length?rbFmtR(nr):"—"],
+    ["Net % (closed)",cl.length?rbFmtPct(np):"—"],
+  ];
+  if(selFirm){
+    var ft=trades.filter(function(t){return(t.firmIds||[]).indexOf(selFirm.id)>=0});
+    var st=calcStats(ft,selFirm.accountSize,selFirm.id);
+    var ddPct=st.hwm>0?((st.hwm-st.bal)/st.hwm*100):0;
+    var status=ddPct<3?"Green — Normal":ddPct<5?"Amber — Drawdown":"Red — Near Limit";
+    tiles.push(["Account",selFirm.name]);
+    tiles.push(["Balance","$"+st.bal.toLocaleString(undefined,{maximumFractionDigits:0})]);
+    tiles.push(["Status",status]);
+  }
+  return {tiles:tiles,trades:tArr,range:range};
+}
+function rbResolveRange(rptKey,override){
+  if(override&&override.start&&override.end)return override;
+  var def=REPORT_FIELDS[rptKey];
+  if(!def)return {start:rbThisMonday(),end:rbAddD(rbThisMonday(),4)};
+  if(def.period==="week"){var s=rbThisMonday();return {start:s,end:rbAddD(s,4)}}
+  if(def.period==="lastWeek"){var s=rbThisMonday();s.setDate(s.getDate()-7);return {start:s,end:rbAddD(s,4)}}
+  if(def.period==="biweek"){return {start:rbBiweekStart(),end:rbBiweekEnd()}}
+  if(def.period==="lastBiweek"){var s=rbBiweekStart();var s2=new Date(s);s2.setDate(s2.getDate()-14);var e2=new Date(s);e2.setDate(e2.getDate()-1);return {start:s2,end:e2}}
+  if(def.period==="month"){var s=rbMonthStart(0);var e=rbMonthStart(1);e.setDate(e.getDate()-1);return {start:s,end:e}}
+  if(def.period==="outlook"){var s=new Date();var e=new Date();e.setMonth(e.getMonth()+6);return {start:s,end:e}}
+  return {start:rbThisMonday(),end:rbAddD(rbThisMonday(),4)}
+}
+// Generate period option lists
+function rbGenWeekOptions(){
+  var opts=[];var mon=rbMondayOfWeek(new Date());
+  for(var i=0;i<52;i++){
+    var wMon=new Date(mon);wMon.setDate(wMon.getDate()-i*7);
+    var wFri=new Date(wMon);wFri.setDate(wFri.getDate()+4);
+    opts.push({val:wMon.toISOString().substring(0,10),label:rbFmtDate(wMon)+" — "+rbFmtDate(wFri)});
+  }
+  return opts;
+}
+function rbGenBiweekOptions(){
+  var opts=[];
+  for(var i=0;i<24;i++){
+    var d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);
+    var y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0");
+    var ml=d.toLocaleString("en-GB",{month:"short",year:"numeric"});
+    opts.push({val:y+"-"+m+"-16",label:ml+" (16th–end)",start:new Date(y,d.getMonth(),16),end:new Date(y,d.getMonth()+1,0)});
+    opts.push({val:y+"-"+m+"-01",label:ml+" (1st–15th)",start:new Date(y,d.getMonth(),1),end:new Date(y,d.getMonth(),15)});
+  }
+  return opts;
+}
+function rbGenMonthOptions(){
+  var opts=[];
+  for(var i=0;i<24;i++){
+    var d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);
+    var y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0");
+    opts.push({val:y+"-"+m,label:d.toLocaleString("en-GB",{month:"long",year:"numeric"}),start:new Date(y,d.getMonth(),1),end:new Date(y,d.getMonth()+1,0)});
+  }
+  return opts;
+}
+
+// HTML→PDF builder for Report Builder
+var RB_CSS=`
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:10pt;color:#2A2A2A;background:#fff;padding:30px 36px}
+  .logo{font-size:26pt;font-weight:bold;color:#C9A227;letter-spacing:2px;text-align:center;margin-bottom:4px}
+  .title{font-size:17pt;font-weight:bold;color:#0D1117;text-align:center;margin-bottom:4px}
+  .sub{font-size:9pt;color:#666;text-align:center;font-style:italic;margin-bottom:20px}
+  h1{font-size:12.5pt;font-weight:bold;color:#0D1117;border-bottom:3px solid #C9A227;padding-bottom:4px;margin:20px 0 8px}
+  h2{font-size:10.5pt;font-weight:bold;color:#2D3748;margin:14px 0 5px}
+  table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:9pt}
+  th{background:#0D1117;color:#fff;padding:5px 8px;text-align:left;border:1px solid #ccc;font-size:8.5pt}
+  td{padding:5px 8px;border:1px solid #ccc;vertical-align:top}
+  .lbl{background:#F0F2F5;font-weight:bold;color:#0D1117;width:35%}
+  .val{color:#444;white-space:pre-wrap}
+  .bg-g{background:#EAF5EF}.bg-r{background:#F5EAEA}.bg-y{background:#FFF8E1}
+  .hdr{display:flex;justify-content:space-between;border-bottom:1px solid #C9A227;padding-bottom:4px;margin-bottom:16px;font-size:7.5pt;color:#888;font-style:italic}
+  .ftr{border-top:1px solid #ccc;margin-top:20px;padding-top:6px;font-size:7.5pt;color:#888;font-style:italic;text-align:center}
+  .pb{page-break-after:always}
+`;
+function rbHtmlDoc(title,bodyHtml){
+  return '<html><head><meta charset="UTF-8"><style>'+RB_CSS+'</style></head><body>'
+    +'<div class="hdr"><span>NGC TRADING  |  '+title+'  |  Confidential</span><span>Nudurupathi Bhavani Shanker</span></div>'
+    +bodyHtml
+    +'<div class="ftr">CONFIDENTIAL — NGC Trading  |  Internal use only</div>'
+    +'</body></html>';
+}
+function rbTW(rows){
+  var r='<table>';
+  rows.forEach(function(row){r+='<tr><td class="lbl">'+row[0]+'</td><td class="val">'+(row[1]===null||row[1]===undefined?'':String(row[1]))+'</td></tr>';});
+  return r+'</table>';
+}
+function rbTABLE(headers,rows){
+  var r='<table><thead><tr>';
+  headers.forEach(function(hd){r+='<th>'+hd+'</th>';});
+  r+='</tr></thead><tbody>';
+  rows.forEach(function(row){
+    r+='<tr>';
+    row.forEach(function(cell){
+      var bg='';var v=cell;
+      if(cell&&typeof cell==='object'){bg='background:#'+( cell.bg||'FFFFFF')+';';v=cell.v||'';}
+      r+='<td style="'+bg+'">'+(v===null||v===undefined?'':String(v))+'</td>';
+    });
+    r+='</tr>';
+  });
+  return r+'</tbody></table>';
+}
+
+function rbBuildPdf(rptKey,u,trades,firms,selFirm,rangeOverride){
+  var def=REPORT_FIELDS[rptKey];
+  if(!def)throw new Error("Unknown report: "+rptKey);
+  var auto=rbAutoTiles(rptKey,trades,firms,selFirm,rangeOverride);
+  var b='';
+  b+='<div class="logo">NGC TRADING</div>';
+  b+='<div class="title">'+def.title+'</div>';
+  b+='<div class="sub">'+def.subtitle+'</div>';
+  b+='<h1>Report Summary</h1>';
+  b+=rbTW(auto.tiles);
+  // Monthly P&L history
+  if(def.includeMonthlyHistory){
+    b+='<div class="pb"></div><h1>Monthly P&L History</h1>';
+    var mm=rpt_monthMap(trades);var mkeys=rpt_orderedKeys(mm);
+    if(mkeys.length){
+      b+=rbTABLE(["Month","Trades","Wins","Win%","Net R","Return%","Running"],
+        mkeys.map(function(k){
+          var md=mm[k];var mt=md.trades||[];var mc=rbClosedIn(mt);
+          var mw=mc.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0}).length;
+          var mwr=mc.length?Math.round(mw/mc.length*100):0;
+          var mnp=md.ret||0;var mnr=rbNetR(mt);var cum=rpt_cumFromMonthMap(mm,k);
+          return [k,String(mc.length),String(mw),mc.length?mwr+"%":"—",mc.length?rbFmtR(mnr):"—",
+            {v:mc.length?rbFmtPct(mnp):"—",bg:mnp>0?"EAF5EF":mnp<0?"F5EAEA":"FFFFFF"},
+            {v:rbFmtPct(cum),bg:cum>0?"EAF5EF":cum<0?"F5EAEA":"FFFFFF"}];
+        })
+      );
+    } else {
+      b+='<p style="color:#999;font-style:italic">No monthly data yet.</p>';
+    }
+  }
+  // User sections
+  def.sections.forEach(function(sec){
+    b+='<h1>'+sec.title+'</h1>';
+    b+=rbTW(sec.fields.map(function(fd){return [fd.label,fv(u,fd.key,"[not filled]")];}));
+  });
+  // Trade log
+  if(def.includeTradeLog){
+    b+='<div class="pb"></div><h1>Trade Log — '+rbFmtDate(auto.range.start)+' to '+rbFmtDate(auto.range.end)+'</h1>';
+    var logTrades=rbClosedIn(auto.trades);
+    if(logTrades.length){
+      b+=rbTABLE(["#","Date","Pair","Dir","Entry","Exit","R","Exit Type","Score"],
+        logTrades.map(function(t,i){
+          var r=getCanonicalRes(t);var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+          var rMult=rp>0?(ap/rp).toFixed(2)+"R":"—";
+          var isEarly=r.exitWhy&&r.exitWhy.toLowerCase().indexOf("early")>=0;
+          var sc=(t.c1?1:0)+(t.c2?1:0)+(t.c3?1:0)+(t.c4?1:0)+(t.c5?1:0)+(t.c6?1:0)+(t.c7?1:0)+(t.c8?1:0);
+          return [i+1,t.timestamp?t.timestamp.substring(0,9):"—",t.pair||"—",t.direction||"—",
+            t.entry||"—",r.exitPrice||"—",
+            {v:rMult,bg:ap>0?"EAF5EF":ap<0?"F5EAEA":"FFFFFF"},
+            {v:isEarly?"Early Close":r.outcome||"—",bg:isEarly?"FFF8E1":"FFFFFF"},
+            sc+"/8"];
+        })
+      );
+    } else {
+      b+='<p style="color:#999;font-style:italic">No closed trades in this period.</p>';
+    }
+  }
+  // Per-trade debrief
+  if(def.includeTradeDebrief){
+    b+='<div class="pb"></div><h1>Per-Trade Debrief</h1>';
+    var debriefs=(u&&u.tradeDebriefs)||{};
+    var dTrades=rbClosedIn(auto.trades);
+    if(dTrades.length===0){
+      b+='<p style="color:#999;font-style:italic">No closed trades in period.</p>';
+    } else {
+      dTrades.forEach(function(t,i){
+        var dbr=debriefs[t.id]||{};
+        var r=getCanonicalRes(t);
+        var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+        var actualR=rp>0?(ap/rp).toFixed(2)+"R":"—";
+        b+='<h2>Trade #'+(i+1)+' — '+(t.pair||'?')+' '+(t.direction||'')+'  '+actualR+'</h2>';
+        b+=rbTW([
+          ["Date",t.timestamp?t.timestamp.substring(0,12):"—"],
+          ["Entry / Exit",(t.entry||"—")+" → "+(r.exitPrice||"—")],
+          ["Result",rbFmtPct(ap)+"  ("+actualR+")"],
+          ["Exit Reason",r.exitWhy||r.outcome||"—"],
+          ["MFE reached",fv(dbr,"mfe","[not filled]")],
+          ["Did price hit target after close?",fv(dbr,"hitAfter","[not filled]")],
+          ["Confluence score (1-6)",fv(dbr,"confluence","[not filled]")],
+          ["COT aligned?",fv(dbr,"cotAligned","[not filled]")],
+          ["What I did well",fv(dbr,"didWell","[not filled]")],
+          ["What I'd do differently",fv(dbr,"doDifferently","[not filled]")],
+          ["Rule violated?",fv(dbr,"ruleViolated","None / [not filled]")],
+        ]);
+      });
+    }
+  }
+  return rbHtmlDoc(def.title,b);
+}
+// ── REPORT PREVIEW MODAL ──────────────────────────────────────────────────────
+function ReportPreviewModal(props){
+  var rpt=props.rpt,u=props.u,trades=props.trades,firms=props.firms,selFirm=props.selFirm;
+  var def=REPORT_FIELDS[rpt];
+  var auto=rbAutoTiles(rpt,trades,firms,selFirm);
+  var debriefTrades=def.includeTradeDebrief?rbClosedIn(auto.trades):[];
+  var logTrades=def.includeTradeLog?rbClosedIn(auto.trades):[];
+  var GOLD="#C9A227",DARK="#0D1117";
+
+  function pCell(text,isLabel,extraStyle){
+    return h("td",{style:Object.assign({padding:"7px 11px",border:"1px solid #ddd",fontSize:12,verticalAlign:"top"},
+      isLabel?{background:"#f5f5f5",fontWeight:"bold",width:"35%"}:{whiteSpace:"pre-wrap"},
+      text==="[not filled]"?{color:"#aaa",fontStyle:"italic"}:{},
+      extraStyle||{})},text);
+  }
+  function pRow(label,value){
+    return h("tr",{key:label},pCell(label,true),pCell(value,false));
+  }
+  function secHeading(title){
+    return h("div",{style:{fontFamily:"Arial,sans-serif",fontWeight:"bold",fontSize:15,color:DARK,
+      borderBottom:"2px solid "+GOLD,paddingBottom:5,marginBottom:10,marginTop:22}},title);
+  }
+
+  return h("div",{style:{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.93)",zIndex:9000,
+    display:"flex",flexDirection:"column",overflow:"hidden"}},
+    // Top bar
+    h("div",{style:{background:"#0a0a0a",borderBottom:"1px solid #222",padding:"11px 20px",display:"flex",
+      alignItems:"center",justifyContent:"space-between",flexShrink:0,gap:10,flexWrap:"wrap"}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#888",flex:1}},
+        "Preview — ",h("span",{style:{color:"#c9a227"}},def.title)),
+      h("div",{style:{display:"flex",gap:8}},
+        h("button",{onClick:props.onDownload,style:{padding:"9px 18px",borderRadius:6,border:"1px solid rgba(201,162,39,.4)",
+          background:"rgba(201,162,39,.12)",color:"#c9a227",cursor:"pointer",fontFamily:"'DM Mono',monospace",
+          fontSize:11,letterSpacing:1}},"\u2193 Download .docx"),
+        h("button",{onClick:props.onClose,style:{padding:"9px 14px",borderRadius:6,border:"1px solid #252525",
+          background:"none",color:"#555",cursor:"pointer",fontFamily:"'DM Mono',monospace",fontSize:11}},"\u2715 Close")
+      )
+    ),
+    // Scrollable white page
+    h("div",{style:{flex:1,overflow:"auto",padding:"28px 20px",background:"#111"}},
+      h("div",{style:{maxWidth:780,margin:"0 auto",background:"white",borderRadius:6,padding:"52px 62px",
+        color:"#1a1a1a",fontFamily:"Arial,sans-serif",lineHeight:1.65,minHeight:900}},
+        // Document header banner
+        h("div",{style:{textAlign:"center",marginBottom:32,borderBottom:"3px solid "+GOLD,paddingBottom:22}},
+          h("div",{style:{fontSize:13,fontWeight:"bold",color:GOLD,letterSpacing:4,marginBottom:6}},"NGC TRADING"),
+          h("div",{style:{fontSize:26,fontWeight:"bold",color:DARK,letterSpacing:1,marginBottom:5}},def.title),
+          h("div",{style:{fontSize:13,color:"#666",fontStyle:"italic"}},def.subtitle)
+        ),
+        // Auto-populated summary
+        secHeading("Report Summary"),
+        h("table",{style:{width:"100%",borderCollapse:"collapse",marginBottom:4}},
+          auto.tiles.map(function(row,i){return pRow(row[0],String(row[1]));})
+        ),
+        // Manual sections
+        def.sections.map(function(sec,si){
+          return h("div",{key:si},
+            secHeading(sec.title),
+            h("table",{style:{width:"100%",borderCollapse:"collapse"}},
+              sec.fields.map(function(fd){
+                return pRow(fd.label, fv(u,fd.key,"[not filled]"));
+              })
+            )
+          );
+        }),
+        // Monthly P&L history placeholder
+        def.includeMonthlyHistory&&h("div",null,
+          secHeading("Monthly P&L History"),
+          h("div",{style:{fontSize:12,color:"#666",fontStyle:"italic",padding:"10px 0"}},"(Auto-generated from trade data — see downloaded .docx)")
+        ),
+        // Trade log
+        logTrades.length>0&&h("div",null,
+          secHeading("Trade Log — "+rbFmtDate(auto.range.start)+" to "+rbFmtDate(auto.range.end)),
+          h("table",{style:{width:"100%",borderCollapse:"collapse",fontSize:11}},
+            h("thead",null,h("tr",null,
+              ["#","Date","Pair","Dir","R-Multiple","Exit Type","Score"].map(function(hd){
+                return h("th",{key:hd,style:{padding:"6px 8px",background:DARK,color:"white",
+                  border:"1px solid #ddd",textAlign:"left"}},hd);
+              })
+            )),
+            h("tbody",null,logTrades.map(function(t,i){
+              var r=getCanonicalRes(t);
+              var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+              var rMult=rp>0?(ap/rp).toFixed(2)+"R":"—";
+              var sc=(t.c1?1:0)+(t.c2?1:0)+(t.c3?1:0)+(t.c4?1:0)+(t.c5?1:0)+(t.c6?1:0)+(t.c7?1:0)+(t.c8?1:0);
+              return h("tr",{key:t.id,style:{background:ap>0?"#f0faf5":ap<0?"#fdf0f0":"white"}},
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd"}},String(i+1)),
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd"}},t.timestamp?t.timestamp.substring(0,10):"—"),
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd"}},t.pair||"—"),
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd"}},t.direction||"—"),
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd",color:ap>0?"#2d7a4a":ap<0?"#c0392b":"#555",fontWeight:"bold"}},rMult),
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd"}},r.exitWhy||r.outcome||"—"),
+                h("td",{style:{padding:"5px 8px",border:"1px solid #ddd"}},sc+"/8")
+              );
+            }))
+          )
+        ),
+        logTrades.length===0&&def.includeTradeLog&&h("div",null,
+          secHeading("Trade Log"),
+          h("div",{style:{fontSize:12,color:"#999",fontStyle:"italic",padding:"8px 0"}},"No closed trades in this period.")
+        ),
+        // Per-trade debrief
+        def.includeTradeDebrief&&h("div",null,
+          secHeading("Per-Trade Debrief"),
+          debriefTrades.length===0
+            ?h("div",{style:{fontSize:12,color:"#999",fontStyle:"italic",padding:"8px 0"}},"No closed trades in this period.")
+            :debriefTrades.map(function(t,i){
+                var dbr=(u.tradeDebriefs||{})[t.id]||{};
+                var r=getCanonicalRes(t);
+                var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+                var actualR=rp>0?(ap/rp).toFixed(2)+"R":"—";
+                return h("div",{key:t.id,style:{marginBottom:18}},
+                  h("div",{style:{fontWeight:"bold",fontSize:14,color:DARK,marginBottom:6,marginTop:10}},
+                    "Trade #"+(i+1)+" — "+(t.pair||"?")+" "+(t.direction||"")+"  ("+actualR+")"),
+                  h("table",{style:{width:"100%",borderCollapse:"collapse"}},
+                    [["MFE reached",fv(dbr,"mfe","[not filled]")],
+                     ["Hit target after close?",fv(dbr,"hitAfter","[not filled]")],
+                     ["Confluence (1-6)",fv(dbr,"confluence","[not filled]")],
+                     ["COT aligned?",fv(dbr,"cotAligned","[not filled]")],
+                     ["What I did well",fv(dbr,"didWell","[not filled]")],
+                     ["What I'd do differently",fv(dbr,"doDifferently","[not filled]")],
+                     ["Rule violated?",fv(dbr,"ruleViolated","[not filled]")]
+                    ].map(function(row,ri){return pRow(row[0],row[1]);})
+                  )
+                );
+              })
+        ),
+        // Confidential footer
+        h("div",{style:{marginTop:44,paddingTop:12,borderTop:"1px solid #ddd",textAlign:"center",
+          fontSize:11,color:"#aaa",fontStyle:"italic"}},"CONFIDENTIAL — NGC Trading | Internal use only")
+      )
+    )
+  );
+}
+
+function ReportBuilderPage(props){
+  var trades=props.trades||[];
+  var firms=props.firms||[];
+  var rptState=useState("weeklyPlanning");var rpt=rptState[0],setRpt=rptState[1];
+  var accState=useState("all");var selAccId=accState[0],setSelAccId=accState[1];
+  var draftState=useState(function(){try{return JSON.parse(localStorage.getItem("nbs9_report_drafts"))||{}}catch(e){return {}}});
+  var drafts=draftState[0],setDrafts=draftState[1];
+  var msgState=useState("");var dlMsg=msgState[0],setDlMsg=msgState[1];
+  var saveTmr=useRef(null);
+
+  // Period selectors
+  var wkOpts=rbGenWeekOptions();
+  var bwOpts=rbGenBiweekOptions();
+  var moOpts=rbGenMonthOptions();
+  var selWkState=useState(wkOpts[0]?wkOpts[0].val:"");var selWk=selWkState[0],setSelWk=selWkState[1];
+  var selBwState=useState(bwOpts[0]?bwOpts[0].val:"");var selBw=selBwState[0],setSelBw=selBwState[1];
+  var selMoState=useState(moOpts[0]?moOpts[0].val:"");var selMo=selMoState[0],setSelMo=selMoState[1];
+
+  function getDateRange(){
+    var def=REPORT_FIELDS[rpt];
+    if(!def)return null;
+    var p=def.period;
+    if(p==="week"||p==="lastWeek"){
+      var opt=wkOpts.find(function(o){return o.val===selWk;});
+      if(opt){var s=new Date(opt.val+"T00:00:00");var e=new Date(s);e.setDate(e.getDate()+6);return {start:s,end:e};}
+    }
+    if(p==="biweek"||p==="lastBiweek"){
+      var opt=bwOpts.find(function(o){return o.val===selBw;});
+      if(opt)return {start:opt.start,end:opt.end};
+    }
+    if(p==="month"||p==="outlook"){
+      var opt=moOpts.find(function(o){return o.val===selMo;});
+      if(opt)return {start:opt.start,end:opt.end};
+    }
+    return null;
+  }
+
+  useEffect(function(){
+    if(saveTmr.current)clearTimeout(saveTmr.current);
+    saveTmr.current=setTimeout(function(){
+      try{localStorage.setItem("nbs9_report_drafts",JSON.stringify(drafts))}catch(e){}
+    },500);
+  },[drafts]);
+
+  var pvState=useState(false);var showPreview=pvState[0],setShowPreview=pvState[1];
+  var selFirm=selAccId!=="all"?firms.find(function(f){return String(f.id)===selAccId}):null;
+  var def=REPORT_FIELDS[rpt];
+  var u=drafts[rpt]||{};
+  var rangeOverride=getDateRange();
+  var auto=rbAutoTiles(rpt,trades,firms,selFirm,rangeOverride);
+
+  function setField(key,val){
+    setDrafts(function(p){
+      var nr=Object.assign({},p[rpt]||{});
+      nr[key]=val;
+      var np=Object.assign({},p);np[rpt]=nr;
+      return np;
+    });
+  }
+  function setDebrief(tid,key,val){
+    setDrafts(function(p){
+      var nr=Object.assign({},p[rpt]||{});
+      var dbs=Object.assign({},nr.tradeDebriefs||{});
+      var row=Object.assign({},dbs[tid]||{});
+      row[key]=val;
+      dbs[tid]=row;
+      nr.tradeDebriefs=dbs;
+      var np=Object.assign({},p);np[rpt]=nr;
+      return np;
+    });
+  }
+
+  function handleDownload(){
+    setDlMsg("Building PDF...");
+    try{
+      var html=rbBuildPdf(rpt,u,trades,firms,selFirm,rangeOverride);
+      var fname=def.filename+"_"+auto.range.start.toISOString().substring(0,10)+".pdf";
+      var opt={
+        margin:[12,12,12,12],
+        filename:fname,
+        image:{type:"jpeg",quality:0.95},
+        html2canvas:{scale:2,useCORS:true,logging:false,letterRendering:true},
+        jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}
+      };
+      html2pdf().set(opt).from(html).save().then(function(){
+        setDlMsg("Downloaded: "+fname);
+        setTimeout(function(){setDlMsg("");},4000);
+      }).catch(function(e){
+        setDlMsg("Error: "+e.message);
+      });
+    }catch(e){setDlMsg("Error: "+e.message);}
+  }
+
+  var GOLD_C="#c9a227";
+  var debriefTrades=(def.includeTradeDebrief)?rbClosedIn(auto.trades):[];
+  var dbr=u.tradeDebriefs||{};
+  var period=def?def.period:"";
+  var isWeek=period==="week"||period==="lastWeek";
+  var isBiweek=period==="biweek"||period==="lastBiweek";
+  var isMonth=period==="month"||period==="outlook";
+
+  return h("div",{className:"fade"},
+    showPreview&&h(ReportPreviewModal,{rpt:rpt,u:u,trades:trades,firms:firms,selFirm:selFirm,rangeOverride:rangeOverride,
+      onClose:function(){setShowPreview(false)},
+      onDownload:handleDownload
+    }),
+    // Account selector
+    h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}},
+      h("div",{style:Object.assign({},LB,{marginRight:4})},"Account"),
+      h("select",{value:selAccId,onChange:function(e){setSelAccId(e.target.value)},style:Object.assign({},IS,{width:"auto",minWidth:200,fontSize:11})},
+        h("option",{value:"all"},"All / Fund View"),
+        firms.map(function(f){return h("option",{key:f.id,value:String(f.id)},f.name)})
+      ),
+      selFirm&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:selFirm.color}},selFirm.name)
+    ),
+    // Report type tabs
+    h("div",{style:{marginBottom:14}},
+      h("div",{style:Object.assign({},LB,{marginBottom:8})},"Report Type"),
+      h("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+        Object.keys(REPORT_FIELDS).map(function(k){
+          var label=REPORT_FIELDS[k].title.replace("REPORT","").trim();
+          return h("button",{key:k,onClick:function(){setRpt(k)},style:Object.assign({},BS,{padding:"7px 14px",fontSize:10,background:rpt===k?"rgba(201,162,39,.12)":"none",border:"1px solid "+(rpt===k?"rgba(201,162,39,.35)":"#151515"),color:rpt===k?GOLD_C:"#555"})},label);
+        })
+      )
+    ),
+    // Period selector
+    (isWeek||isBiweek||isMonth)&&h("div",{style:{marginBottom:14}},
+      h("div",{style:Object.assign({},LB,{marginBottom:6})},isWeek?"Select Week":isBiweek?"Select Bi-Weekly Period":"Select Month"),
+      isWeek&&h("select",{value:selWk,onChange:function(e){setSelWk(e.target.value)},style:Object.assign({},IS,{fontSize:11,width:"100%"})},
+        wkOpts.map(function(o){return h("option",{key:o.val,value:o.val},o.label);})
+      ),
+      isBiweek&&h("select",{value:selBw,onChange:function(e){setSelBw(e.target.value)},style:Object.assign({},IS,{fontSize:11,width:"100%"})},
+        bwOpts.map(function(o){return h("option",{key:o.val,value:o.val},o.label);})
+      ),
+      isMonth&&h("select",{value:selMo,onChange:function(e){setSelMo(e.target.value)},style:Object.assign({},IS,{fontSize:11,width:"100%"})},
+        moOpts.map(function(o){return h("option",{key:o.val,value:o.val},o.label);})
+      )
+    ),
+    // Report header + download
+    h("div",{style:{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:10,padding:"18px 20px",marginBottom:14}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap",marginBottom:10}},
+        h("div",null,
+          h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:GOLD_C,letterSpacing:1}},def.title),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#555",lineHeight:1.5,marginTop:3}},def.subtitle)
+        ),
+        h("button",{onClick:handleDownload,style:Object.assign({},BS,{background:"rgba(201,162,39,.12)",border:"1px solid rgba(201,162,39,.35)",color:GOLD_C,padding:"10px 20px",fontSize:11,borderRadius:7})},
+          dlMsg&&dlMsg.indexOf("Building")>=0?"Generating...":"↓ Download PDF"
+        )
+      ),
+      dlMsg&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:dlMsg.indexOf("Error")>=0?"#ff4444":"#34d399",padding:"8px 12px",background:dlMsg.indexOf("Error")>=0?"rgba(255,68,68,.06)":"rgba(52,211,153,.06)",borderRadius:6,border:"1px solid "+(dlMsg.indexOf("Error")>=0?"rgba(255,68,68,.2)":"rgba(52,211,153,.2)")}},dlMsg)
+    ),
+    // Auto-populated tiles
+    h("div",{style:{background:"#080808",border:"1px solid #141414",borderRadius:8,padding:"14px 16px",marginBottom:14}},
+      h("div",{style:Object.assign({},LB,{color:GOLD_C,marginBottom:10})},"Auto-populated from your journal"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))",gap:8}},
+        auto.tiles.map(function(row,i){
+          return h("div",{key:i,style:{background:"#0a0a0a",borderRadius:6,padding:"10px 12px",border:"1px solid #141414"}},
+            h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#444",letterSpacing:2,textTransform:"uppercase",marginBottom:3}},row[0]),
+            h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:13,fontWeight:"bold",color:"#888"}},String(row[1]))
+          );
+        })
+      )
+    ),
+    // Manual input sections
+    def.sections.map(function(sec,si){
+      return h("div",{key:si,style:{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:8,padding:"14px 16px",marginBottom:10}},
+        h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,color:"#e0e0e0",letterSpacing:1,marginBottom:10}},sec.title),
+        h("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+          sec.fields.map(function(fd){
+            var val=u[fd.key]||"";
+            if(fd.kind==="textarea"){
+              return h(TA,{key:fd.key,label:fd.label,rows:fd.rows||3,value:val,onChange:function(e){setField(fd.key,e.target.value)},placeholder:"[___]"});
+            }
+            if(fd.kind==="select"){
+              return h(Se,{key:fd.key,label:fd.label,value:val,onChange:function(v){setField(fd.key,v)},options:fd.options});
+            }
+            return h(I,{key:fd.key,label:fd.label,value:val,onChange:function(e){setField(fd.key,e.target.value)},placeholder:fd.placeholder||"[___]"});
+          })
+        )
+      );
+    }),
+    // Per-trade debrief
+    def.includeTradeDebrief && h("div",{style:{marginTop:10}},
+      h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,color:GOLD_C,letterSpacing:1,marginBottom:10}},"Per-Trade Debrief"),
+      debriefTrades.length===0
+        ? h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#444",padding:"14px 16px",background:"#0a0a0a",border:"1px solid #141414",borderRadius:7}},"No closed trades in this period.")
+        : debriefTrades.map(function(t,i){
+            var row=dbr[t.id]||{};
+            var r=getCanonicalRes(t);
+            var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+            var actualR=rp>0?(ap/rp).toFixed(2)+"R":"—";
+            return h("div",{key:t.id,style:{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:8,padding:"14px 16px",marginBottom:10}},
+              h("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:10}},
+                h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,color:"#e0e0e0",letterSpacing:1}},"Trade #"+(i+1)+" — "+(t.pair||"?")+" "+(t.direction||"")),
+                h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:ap>0?"#34d399":"#ff4444"}},actualR)
+              ),
+              h("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+                h(I,{label:"MFE reached",value:row.mfe||"",onChange:function(e){setDebrief(t.id,"mfe",e.target.value)},placeholder:"e.g. 3.5R"}),
+                h(Se,{label:"Hit target after close?",value:row.hitAfter||"",onChange:function(v){setDebrief(t.id,"hitAfter",v)},options:["Yes","No","Still running"]}),
+                h(I,{label:"Confluence (1-6)",value:row.confluence||"",onChange:function(e){setDebrief(t.id,"confluence",e.target.value)}}),
+                h(Se,{label:"COT aligned?",value:row.cotAligned||"",onChange:function(v){setDebrief(t.id,"cotAligned",v)},options:["Yes","No","N/A"]}),
+                h(TA,{label:"What I did well",rows:2,value:row.didWell||"",onChange:function(e){setDebrief(t.id,"didWell",e.target.value)}}),
+                h(TA,{label:"What I'd do differently",rows:2,value:row.doDifferently||"",onChange:function(e){setDebrief(t.id,"doDifferently",e.target.value)}}),
+                h(I,{label:"Rule violated?",value:row.ruleViolated||"",onChange:function(e){setDebrief(t.id,"ruleViolated",e.target.value)},placeholder:"None / describe"})
+              )
+            );
+          })
+    )
+  );
+}
+
+
+function NGCReportsPage(props){
+  var trades=props.trades||[];
+  var firms=props.firms||[];
+  var grpState=useState("weekly");var grp=grpState[0],setGrp=grpState[1];
+  var subState=useState("planning");var sub=subState[0],setSub=subState[1];
+  var msgState=useState("");var dlMsg=msgState[0],setDlMsg=msgState[1];
+  // Date selectors
+  var swState=useState(function(){var m=new Date();m.setHours(0,0,0,0);var dow=m.getDay()||7;m.setDate(m.getDate()+1-dow);return m.toISOString().substring(0,10);});
+  var selWeekDate=swState[0],setSelWeekDate=swState[1];
+  var smState2=useState(function(){var d=new Date();return d.getFullYear()+"-"+(String(d.getMonth()+1).padStart(2,"0"));});
+  var selMonth=smState2[0],setSelMonth=smState2[1];
+  var sbwState=useState(function(){var d=new Date();var half=d.getDate()<=15?"-01":"-16";return d.getFullYear()+"-"+(String(d.getMonth()+1).padStart(2,"0"))+half;});
+  var selBiweek=sbwState[0],setSelBiweek=sbwState[1];
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+  function fmtDate(d){if(!d)return"[DATE]";return d.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});}
+  function mondayOfWeek(d){var t=new Date(d);t.setHours(0,0,0,0);var dow=t.getDay()||7;t.setDate(t.getDate()+1-dow);return t;}
+  function thisMonday(){return mondayOfWeek(new Date());}
+  function lastMonday(){var m=thisMonday();m.setDate(m.getDate()-7);return m;}
+  function addD(d,n){var r=new Date(d);r.setDate(r.getDate()+n);return r;}
+  function monthStart(offset){var d=new Date();d.setDate(1);d.setHours(0,0,0,0);d.setMonth(d.getMonth()+offset);return d;}
+  function biweekStart(){var d=new Date();return d.getDate()<=15?new Date(d.getFullYear(),d.getMonth(),1):new Date(d.getFullYear(),d.getMonth(),16);}
+  function biweekEnd(){var d=new Date();return d.getDate()<=15?new Date(d.getFullYear(),d.getMonth(),15):new Date(d.getFullYear(),d.getMonth()+1,0);}
+  // Selected period helpers
+  function selWeekStart(){var d=new Date(selWeekDate+"T00:00:00");return d;}
+  function selWeekEnd(){return addD(selWeekStart(),4);}
+  function selMonthStartDate(){var p=selMonth.split("-");return new Date(parseInt(p[0]),parseInt(p[1])-1,1);}
+  function selMonthEndDate(){var s=selMonthStartDate();return new Date(s.getFullYear(),s.getMonth()+1,0);}
+  function selBiweekStartDate(){var p=selBiweek.split("-");var y=parseInt(p[0]),m=parseInt(p[1])-1,h=parseInt(p[2]);return new Date(y,m,h);}
+  function selBiweekEndDate(){var s=selBiweekStartDate();if(s.getDate()===1)return new Date(s.getFullYear(),s.getMonth(),15);return new Date(s.getFullYear(),s.getMonth()+1,0);}
+  // Generate biweek options for the past 12 months
+  function genBiweekOptions(){
+    var opts=[];
+    for(var i=0;i<12;i++){
+      var d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);
+      var y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0");
+      var ml=d.toLocaleString("en-GB",{month:"short",year:"numeric"});
+      opts.push({val:y+"-"+m+"-16",label:ml+" (16th–end)"});
+      opts.push({val:y+"-"+m+"-01",label:ml+" (1st–15th)"});
+    }
+    return opts;
+  }
+  // Generate month options for past 24 months
+  function genMonthOptions(){
+    var opts=[];
+    for(var i=0;i<24;i++){
+      var d=new Date();d.setDate(1);d.setMonth(d.getMonth()-i);
+      var y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0");
+      opts.push({val:y+"-"+m,label:d.toLocaleString("en-GB",{month:"long",year:"numeric"})});
+    }
+    return opts;
+  }
+  // Generate week options for past 52 weeks
+  function genWeekOptions(){
+    var opts=[];
+    var mon=mondayOfWeek(new Date());
+    for(var i=0;i<52;i++){
+      var wMon=new Date(mon);wMon.setDate(wMon.getDate()-i*7);
+      var wFri=new Date(wMon);wFri.setDate(wFri.getDate()+4);
+      var key=wMon.toISOString().substring(0,10);
+      opts.push({val:key,label:wMon.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})+" — "+wFri.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})});
+    }
+    return opts;
+  }
+
+  function tradesInRange(start,end){
+    return trades.filter(function(t){
+      var d=parseDate(t.timestamp);
+      return d&&d>=start&&d<=end;
+    });
+  }
+  function closedIn(tArr){
+    return tArr.filter(function(t){
+      var r=getCanonicalRes(t);
+      return r.outcome&&!r.outcome.includes("Running")&&r.actualPct!==""&&r.actualPct!=null&&!isNaN(parseFloat(r.actualPct));
+    });
+  }
+  function winRate(tArr){
+    var cl=closedIn(tArr);
+    if(!cl.length)return 0;
+    var w=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0;});
+    return Math.round(w.length/cl.length*100);
+  }
+  function netR(tArr){
+    var cl=closedIn(tArr);
+    return cl.reduce(function(s,t){
+      var rp=parseFloat(t.riskPct||1),ap=parseFloat(getCanonicalRes(t).actualPct||0);
+      return s+(rp>0?ap/rp:0);
+    },0);
+  }
+  function netPct(tArr){
+    return closedIn(tArr).reduce(function(s,t){return s+(parseFloat(getCanonicalRes(t).actualPct)||0);},0);
+  }
+  function allTimeStats(){
+    var cl=closedIn(trades);
+    var wins=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0;});
+    var losses=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)<0;});
+    var wr=cl.length?Math.round(wins.length/cl.length*100):0;
+    var mm=rpt_monthMap(trades),arr=rpt_monthArr(mm);
+    var ss=rpt_sharpeSortino(arr);
+    var maxDD=rpt_maxDDFromMonthMap(mm);
+    var ann=rpt_annFromMonthMap(mm);
+    var gp=wins.reduce(function(a,t){return a+(parseFloat(getCanonicalRes(t).actualPct)||0);},0);
+    var gl=Math.abs(losses.reduce(function(a,t){return a+(parseFloat(getCanonicalRes(t).actualPct)||0);},0));
+    var pf=gl>0?gp/gl:wins.length?99:0;
+    var calmar=maxDD>0?ann/maxDD:0;
+    return{total:cl.length,wins:wins.length,losses:losses.length,wr:wr,sharpe:ss.sharpe,sortino:ss.sortino,maxDD:maxDD,ann:ann,pf:pf,calmar:calmar};
+  }
+  function mfeAnalysis(tArr){
+    var cl=closedIn(tArr);
+    var earlyCount=cl.filter(function(t){
+      var r=getCanonicalRes(t);
+      return r.exitWhy&&(r.exitWhy.toLowerCase().includes("early")||r.exitWhy.toLowerCase().includes("emotional"));
+    }).length;
+    return{total:cl.length,earlyCount:earlyCount};
+  }
+  function formatR(n){return(n>=0?"+":"")+n.toFixed(2)+"R";}
+  function formatPct(n){return(n>=0?"+":"")+n.toFixed(2)+"%";}
+
+  // ── HTML→PDF ENGINE ──────────────────────────────────────────────────────
+  var CSS=`
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,Helvetica,sans-serif;font-size:10pt;color:#2A2A2A;background:#fff;padding:30px 36px}
+    .rpt-logo{font-size:28pt;font-weight:bold;color:#C9A227;letter-spacing:2px;text-align:center;margin-bottom:4px}
+    .rpt-title{font-size:18pt;font-weight:bold;color:#0D1117;text-align:center;margin-bottom:4px}
+    .rpt-sub{font-size:9pt;color:#666;text-align:center;font-style:italic;margin-bottom:20px}
+    h1{font-size:13pt;font-weight:bold;color:#0D1117;border-bottom:3px solid #C9A227;padding-bottom:4px;margin:20px 0 8px}
+    h2{font-size:11pt;font-weight:bold;color:#2D3748;margin:14px 0 6px}
+    p{font-size:9.5pt;line-height:1.5;margin-bottom:8px}
+    .sp{margin:6px 0}
+    .pb{page-break-after:always;margin:0}
+    table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:9pt}
+    th{background:#0D1117;color:#fff;padding:5px 8px;text-align:left;border:1px solid #ccc;font-size:8.5pt}
+    td{padding:5px 8px;border:1px solid #ccc;vertical-align:top}
+    tr:nth-child(even) td{background:#F7F7F7}
+    .tw-label{background:#F0F2F5;font-weight:bold;color:#0D1117;width:35%;font-size:9pt}
+    .tw-val{color:#444;font-size:9pt}
+    .gold-box{border-left:4px solid #C9A227;background:#FFF8DC;padding:10px 14px;margin:8px 0;border-radius:2px}
+    .gold-box p{margin:2px 0;font-size:9.5pt}
+    .gold-box .gb-bold{font-weight:bold;color:#0D1117}
+    .gold-box .gb-norm{color:#444}
+    .dark-box{background:#0D1117;border:2px solid #C9A227;padding:12px 16px;margin:8px 0;border-radius:2px}
+    .dark-box p{margin:2px 0;font-size:9.5pt}
+    .dark-box .db-gold{color:#C9A227;font-weight:bold}
+    .dark-box .db-white{color:#fff}
+    .dark-box .db-gray{color:#AAA}
+    .hdr-bar{display:flex;justify-content:space-between;border-bottom:1px solid #C9A227;padding-bottom:4px;margin-bottom:16px;font-size:7.5pt;color:#888;font-style:italic}
+    .ftr{border-top:1px solid #ccc;margin-top:20px;padding-top:6px;font-size:7.5pt;color:#888;font-style:italic;text-align:center}
+    .tag-green{color:#1B7A3D;font-weight:bold}
+    .tag-red{color:#B22222;font-weight:bold}
+    .bg-green{background:#EAF5EF}
+    .bg-red{background:#F5EAEA}
+    .bg-gold{background:#FFF8E1}
+  `;
+
+  function htmlDoc(title,hdrText,bodyHtml){
+    return '<html><head><meta charset="UTF-8"><style>'+CSS+'</style></head><body>'
+      +'<div class="hdr-bar"><span>NGC TRADING  |  '+hdrText+'  |  Confidential</span><span>Internal use only</span></div>'
+      +bodyHtml
+      +'<div class="ftr">CONFIDENTIAL — NGC Trading  |  Internal use only</div>'
+      +'</body></html>';
+  }
+
+  function logo(title,sub){
+    return '<div class="rpt-logo">NGC TRADING</div>'
+      +'<div class="rpt-title">'+title+'</div>'
+      +'<div class="rpt-sub">'+sub+'</div>';
+  }
+  function H1(t){return '<h1>'+t+'</h1>';}
+  function H2(t){return '<h2>'+t+'</h2>';}
+  function SP(){return '<div class="sp"></div>';}
+  function PB(){return '<div class="pb"></div>';}
+  function P(t,italic,color){var s='style="'+(italic?'font-style:italic;':'')+(color?'color:'+color+';':'')+'"';return '<p '+s+'>'+t+'</p>';}
+
+  function TW(rows){
+    var r='<table>';
+    rows.forEach(function(row){r+='<tr><td class="tw-label">'+row[0]+'</td><td class="tw-val">'+String(row[1])+'</td></tr>';});
+    return r+'</table>';
+  }
+  function TABLE(headers,rows,colBgs){
+    var r='<table><thead><tr>';
+    headers.forEach(function(h){r+='<th>'+h+'</th>';});
+    r+='</tr></thead><tbody>';
+    rows.forEach(function(row){
+      r+='<tr>';
+      row.forEach(function(cell,i){
+        var bg=colBgs&&colBgs[i]?'background:#'+colBgs[i]+';':'';
+        var cls='';
+        if(cell&&typeof cell==='object'){bg='background:#'+( cell.bg||'FFFFFF')+';';cell=cell.v||'';}
+        r+='<td style="'+bg+'">'+(cell===undefined||cell===null?'':String(cell))+'</td>';
+      });
+      r+='</tr>';
+    });
+    return r+'</tbody></table>';
+  }
+  function GOLD_BOX(lines){
+    var r='<div class="gold-box">';
+    lines.forEach(function(l){r+='<p class="'+(l[1]?'gb-bold':'gb-norm')+'">'+l[0]+'</p>';});
+    return r+'</div>';
+  }
+  function DARK_BOX(lines){
+    var r='<div class="dark-box">';
+    lines.forEach(function(l){
+      var cls=l[1]?'db-gold':(l[3]==='AAAAAA'?'db-gray':'db-white');
+      r+='<p class="'+cls+'">'+l[0]+'</p>';
+    });
+    return r+'</div>';
+  }
+
+  function downloadPdf(html,filename){
+    setDlMsg("Generating PDF...");
+    var container=document.createElement("div");
+    container.style.cssText="position:fixed;left:-9999px;top:0;width:794px;background:#fff";
+    container.innerHTML=html;
+    document.body.appendChild(container);
+    var opt={margin:[10,10,10,10],filename:filename,image:{type:"jpeg",quality:0.97},html2canvas:{scale:2,useCORS:true,logging:false},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}};
+    html2pdf().set(opt).from(container).save().then(function(){
+      document.body.removeChild(container);
+      setDlMsg("Downloaded: "+filename);
+      setTimeout(function(){setDlMsg("");},4000);
+    }).catch(function(e){
+      document.body.removeChild(container);
+      setDlMsg("Error: "+e.message);
+    });
+  }
+
+  // ── REPORT BUILDERS (HTML) ────────────────────────────────────────────────
+  function buildWeeklyPlanning(){
+    var wStart=selWeekStart(),wEnd=selWeekEnd();
+    var wLabel="Week of "+fmtDate(wStart)+" — "+fmtDate(wEnd);
+    var ats=allTimeStats();
+    var b="";
+    b+=logo("WEEKLY PLANNING REPORT","Pre-Week Intelligence Brief — Written Every Sunday");
+    b+=SP()+SP();
+    b+=H1("REPORT INFORMATION");
+    b+=TW([
+      ["Report Type","Weekly Planning — Pre-Week Intelligence"],
+      ["Week",wLabel],
+      ["Written On","Sunday "+fmtDate(new Date())],
+      ["Pairs Under Review","EUR/USD  |  GBP/USD  |  USD/JPY"],
+      ["Account Status","[ Green — Normal ]  [ Amber — Drawdown >3% ]  [ Red — Near Limit ]"],
+      ["All-Time Win Rate",ats.wr+"%  ("+ats.wins+" wins / "+ats.losses+" losses / "+ats.total+" total)"],
+      ["All-Time Sharpe Ratio",ats.sharpe.toFixed(2)],
+      ["Max Drawdown (all-time)",ats.maxDD.toFixed(2)+"%"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION I — MACRO ENVIRONMENT");
+    b+=H2("1.1  The Dollar (DXY) — Master Compass");
+    b+=P("Complete this first. DXY direction determines baseline bias for all three pairs.",true,"#666");
+    b+=SP();
+    b+=TW([
+      ["DXY Weekly Bias","Bullish / Bearish / Neutral — structure: ___"],
+      ["DXY Daily Bias","Bullish / Bearish / Neutral — aligned with weekly: yes / no"],
+      ["Key DXY Level","Nearest supply: ___  |  Nearest demand: ___"],
+      ["EUR/USD implication","DXY bullish = EUR/USD bearish pressure / DXY bearish = EUR/USD bullish"],
+      ["GBP/USD implication","Same directional logic — note any divergence"],
+      ["USD/JPY implication","DXY bullish = USD/JPY bullish / DXY bearish = USD/JPY bearish"],
+    ]);
+    b+=SP();
+    b+=H2("1.2  Central Bank Policy");
+    b+=TW([
+      ["Federal Reserve (USD)","Hiking / Pausing / Cutting  |  Language: hawkish / neutral / dovish"],
+      ["Bank of England (GBP)","Hiking / Pausing / Cutting  |  Language: hawkish / neutral / dovish"],
+      ["Bank of Japan (JPY)","Ultra-loose / Normalising / Hiking  |  Intervention risk: yes / no"],
+      ["Key CB Divergence","Which CB is most divergent and why: ___"],
+    ]);
+    b+=SP();
+    b+=H2("1.3  COT Data — Institutional Positioning");
+    b+=P("Source: TradingView 'COT Legacy' indicator on 6E, 6B, 6J futures. Checked every Friday.",true,"#666");
+    b+=TABLE(["Pair","Commercials","Extreme?","Retail","COT Signal"],[
+      ["EUR/USD","Long / Short ___","Yes — Bullish/Bearish / No","Long / Short","Bullish / Bearish / Neutral / SKIP"],
+      ["GBP/USD","Long / Short ___","Yes — Bullish/Bearish / No","Long / Short","Bullish / Bearish / Neutral / SKIP"],
+      ["USD/JPY","Long / Short ___","Yes — Bullish/Bearish / No","Long / Short","Bullish / Bearish / Neutral / SKIP"],
+    ]);
+    b+=SP();
+    b+=H2("1.4  Capital Flows & Seasonality");
+    b+=TW([
+      ["Risk Environment","Risk-ON / Risk-OFF / Mixed"],
+      ["Gold Direction","Rising / Falling / Consolidating — implication: ___"],
+      ["US 10Y Yield","Rising (USD support) / Falling (USD pressure) / Flat"],
+      ["Seasonal Bias (this month)","EUR/USD: ___ | GBP/USD: ___ | USD/JPY: ___"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION II — HIGHER TIMEFRAME STRUCTURE");
+    b+=H2("2.1  EUR/USD");
+    b+=TW([
+      ["Weekly Trend","Uptrend (HH/HL) / Downtrend (LH/LL) / Ranging"],
+      ["Daily Structure","Aligned with weekly: yes / no"],
+      ["Active Zone (NBS)","Zone top: ___  |  Zone bottom: ___"],
+      ["Zone Status","Fresh / Approaching ___ pips / At zone now"],
+      ["Zone Quality Score","___ / 6  (A+: 5-6 | A: 4 | B-half size: 3 | No trade: 0-2)"],
+      ["Wyckoff / Pattern","Spring/CME: yes ___ / No / CERC forming"],
+      ["BOS Confirmed?","Yes / Waiting for close above/below ___ / No BOS yet"],
+      ["Regime","Trending — NBS has full edge / Ranging — skip this pair"],
+    ]);
+    b+=SP();
+    b+=H2("2.2  GBP/USD");
+    b+=TW([
+      ["Weekly Trend","Uptrend / Downtrend / Ranging"],
+      ["Daily Structure","Aligned with weekly: yes / no"],
+      ["Active Zone","Zone top: ___  |  Zone bottom: ___"],
+      ["Zone Status","Fresh / Approaching / At zone"],
+      ["Zone Quality Score","___ / 6"],
+      ["BOS Confirmed?","Yes / Waiting / No BOS yet"],
+      ["Regime","Trending — full edge / Ranging — skip"],
+    ]);
+    b+=SP();
+    b+=H2("2.3  USD/JPY");
+    b+=TW([
+      ["Weekly Trend","Uptrend / Downtrend / Ranging"],
+      ["Daily Structure","Aligned with weekly: yes / no"],
+      ["Active Zone","Zone top: ___  |  Zone bottom: ___"],
+      ["Zone Status","Fresh / Approaching / At zone"],
+      ["Zone Quality Score","___ / 6"],
+      ["BOJ Intervention Risk","Elevated — monitor / Low — normal"],
+      ["Regime","Trending — full edge / Ranging — skip"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION III — CONFLUENCE SCORECARD");
+    b+=TABLE(["Confluence Layer","EUR/USD","GBP/USD","USD/JPY"],[
+      ["1. DXY bias supports direction?","Yes / No","Yes / No","Yes / No"],
+      ["2. COT — Commercials aligned?","Yes / No / SKIP","Yes / No / SKIP","Yes / No / SKIP"],
+      ["3. CB macro supports direction?","Yes / No","Yes / No","Yes / No"],
+      ["4. Seasonality neutral or supports?","Yes / No","Yes / No","Yes / No"],
+      ["5. HTF structure + valid zone?","Yes / No","Yes / No","Yes / No"],
+      ["6. News calendar clear?","Yes / No","Yes / No","Yes / No"],
+      ["NBS Zone Quality Score","___ / 6","___ / 6","___ / 6"],
+      ["TOTAL CONFLUENCE","___ / 6","___ / 6","___ / 6"],
+    ]);
+    b+=GOLD_BOX([
+      ["6/6 — A++ trade. Full 1% risk. Maximum conviction. Set and forget.",true],
+      ["5/6 — A+ trade. Full 1% risk. Note missing layer.",false],
+      ["4/6 — A trade. Full 1% if missing layers are not critical conflicts.",false],
+      ["3/6 — B trade. 0.5% risk only.",false],
+      ["2/6 or below — No trade. Close the chart.",true],
+      ["ANY SKIP on COT — No trade. No exceptions.",true],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION IV — NEWS CALENDAR");
+    b+=TABLE(["Day","Event","Currency","Impact","Avoid Window"],[
+      ["Monday","","USD/GBP/JPY","High/Med","48h before → 4h after"],
+      ["Tuesday","","","",""],
+      ["Wednesday","","","",""],
+      ["Thursday","","","",""],
+      ["Friday","","","",""],
+    ]);
+    b+=TW([
+      ["Fed / FOMC / US Data","Event: ___  Date: ___  — Avoid EUR/USD + USD/JPY 48h before"],
+      ["BOE / UK Data","Event: ___  Date: ___  — Avoid GBP/USD 48h before"],
+      ["BOJ Risk","Event: ___  — Avoid USD/JPY 48h before"],
+      ["Weekly Risk Level","Low — standard sizing / Medium — 0.75% / High — 0.5% max"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION V — TRADE PLANS");
+    b+=H2("5.1  EUR/USD");
+    b+=TW([
+      ["Direction","Long / Short / No Trade"],
+      ["Entry Zone","___ to ___"],
+      ["Entry Trigger","First or second 4H body close [above/below] ___ after zone touch"],
+      ["Stop Loss","Level: ___  |  Distance: ___ pips"],
+      ["Target 1 (3-4R)","Level: ___"],
+      ["Target 2 (7-9R)","Level: ___"],
+      ["Risk Size","___% of account"],
+      ["Correlation Check","EUR/USD long AND GBP/USD long = size each at 0.5%"],
+      ["Status","ACTIVE — alert set / WATCHLIST / SKIP"],
+    ]);
+    b+=SP();
+    b+=H2("5.2  GBP/USD");
+    b+=TW([
+      ["Direction","Long / Short / No Trade"],
+      ["Entry Zone","___ to ___"],
+      ["Entry Trigger","First or second 4H body close [above/below] ___ after zone touch"],
+      ["Stop Loss","Level: ___  |  Distance: ___ pips"],
+      ["Target 1 (3-4R)","Level: ___"],
+      ["Target 2 (7-9R)","Level: ___"],
+      ["Status","ACTIVE / WATCHLIST / SKIP"],
+    ]);
+    b+=SP();
+    b+=H2("5.3  USD/JPY");
+    b+=TW([
+      ["Direction","Long / Short / No Trade"],
+      ["Entry Zone","___ to ___"],
+      ["Stop Loss","Level: ___"],
+      ["Target 1 (3-4R)","Level: ___"],
+      ["Target 2 (7-9R)","Level: ___"],
+      ["BOJ Risk","Any intervention risk this week: ___"],
+      ["Status","ACTIVE / WATCHLIST / SKIP"],
+    ]);
+    b+=SP()+SP();
+    b+=H1("SECTION VI — EXECUTION READINESS");
+    b+=TW([
+      ["Mental State","Green (normal) / Amber (half size) / Red (no new entries)"],
+      ["Rule to Focus On This Week","___"],
+      ["Max Risk Per Trade","1% / 0.75% / 0.5%"],
+      ["Max Concurrent Risk","2% across all open trades"],
+      ["Open Trades Carrying Over","None / Pair: ___ Direction: ___ Status: ___"],
+    ]);
+    b+=DARK_BOX([
+      ["THE ONLY VALID REASONS TO CLOSE A TRADE BEFORE SL OR TP:",true,false,"C9A227"],
+      ["SL hit.   TP hit.   Confirmed 4H body close that structurally invalidates thesis.   Black swan event.",false,false,"FFFFFF"],
+      ["NOT VALID: drawdown, discomfort, impatience, wanting to lock profit, another trader's opinion.",false,false,"AAAAAA"],
+    ]);
+    return htmlDoc("Weekly Planning",curReport.label,b);
+  }
+
+  function buildWeeklyReview(){
+    var wStart=selWeekStart(),wEnd=addD(wStart,4);
+    var wTrades=tradesInRange(wStart,wEnd);
+    var cl=closedIn(wTrades);
+    var wr=winRate(wTrades);
+    var nr=netR(wTrades);
+    var np=netPct(wTrades);
+    var mfe=mfeAnalysis(wTrades);
+    var ats=allTimeStats();
+    var wins=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0;});
+    var losses=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)<0;});
+    var b="";
+    b+=logo("WEEKLY PERFORMANCE REVIEW","Post-Week Debrief — Written Every Friday or Saturday");
+    b+=SP()+SP();
+    b+=H1("REPORT INFORMATION");
+    b+=TW([
+      ["Period","Week of "+fmtDate(wStart)+" — "+fmtDate(wEnd)],
+      ["Written On",fmtDate(new Date())],
+      ["Week Result",np>=0?"PROFITABLE":"LOSS"],
+      ["Net P&L (R)",formatR(nr)],
+      ["Net P&L (%)",formatPct(np)],
+      ["Trades Taken",cl.length+" total  |  "+wins.length+" wins  /  "+losses.length+" losses"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION I — PERFORMANCE SCORECARD");
+    b+=TABLE(["Metric","Target","Actual","Delta","Pass/Fail"],[
+      ["Win Rate",">35%",wr+"%",(wr-35>=0?"+":"")+String(wr-35)+"%",{v:wr>=35?"Pass":"Fail",bg:wr>=35?"EAF5EF":"F5EAEA"}],
+      ["Avg R on Winners",">4R",wins.length>0?(wins.reduce(function(a,t){var rp=parseFloat(t.riskPct||1),ap=parseFloat(getCanonicalRes(t).actualPct||0);return a+(rp>0?ap/rp:0);},0)/wins.length).toFixed(2)+"R":"—","—","—"],
+      ["Early Exits","0",String(mfe.earlyCount),"—",{v:mfe.earlyCount===0?"Pass":"Fail",bg:mfe.earlyCount===0?"EAF5EF":"F5EAEA"}],
+      ["Total Trades","1-3",String(cl.length),"—",cl.length<=3?"Pass":"Review"],
+    ]);
+    b+=GOLD_BOX([
+      ["WEEK P&L: "+formatR(nr)+"  |  "+formatPct(np)+"  |  Trades: "+cl.length,true],
+      ["All-time win rate: "+ats.wr+"%  |  All-time Sharpe: "+ats.sharpe.toFixed(2)+"  |  Max DD: "+ats.maxDD.toFixed(2)+"%",false],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION II — EARLY EXIT ANALYSIS");
+    b+=P("If you exited early, document it here. This is where money is being left on the table.",true,"#666");
+    b+=TABLE(["Pair","Target R","Actual R","Did Price Hit Target After?","Root Cause"],
+      cl.length>0?cl.map(function(t){
+        var r=getCanonicalRes(t);
+        var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+        var actualR=rp>0?(ap/rp).toFixed(2)+"R":"—";
+        var isEarly=r.exitWhy&&(r.exitWhy.toLowerCase().includes("early")||r.exitWhy.toLowerCase().includes("emotional"));
+        return [t.pair||"—","___R",actualR,"Yes / No / Still running",{v:isEarly?(r.exitWhy||"Early close"):"On plan",bg:isEarly?"FFF8E1":"FFFFFF"}];
+      }):[["No trades this week","—","—","—","—"]]
+    );
+    b+=GOLD_BOX([
+      ["Early exit count this week: "+mfe.earlyCount+"  |  Running total exits logged: "+mfeAnalysis(trades).earlyCount+" all time",true],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION III — TRADE-BY-TRADE DEBRIEF");
+    if(cl.length>0){
+      cl.forEach(function(t,i){
+        var r=getCanonicalRes(t);
+        var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+        var actualR=rp>0?(ap/rp).toFixed(2)+"R":"—";
+        b+='<h3 style="font-size:10.5pt;color:#444;margin:12px 0 6px">Trade #'+(i+1)+' — '+(t.pair||'?')+' '+(t.direction||'')+'</h3>';
+        b+=TW([
+          ["Pair & Direction",(t.pair||"?")+" "+(t.direction||"?")],
+          ["Entry Date",t.timestamp?t.timestamp.substring(0,12):"—"],
+          ["Entry Price",t.entry||"—"],
+          ["Exit Price",r.exitPrice||"—"],
+          ["Result",formatPct(ap)+"  ("+actualR+")"],
+          ["Planned Target",t.tp||"—"],
+          ["Risk %",(t.riskPct||"1")+"%"],
+          ["Exit Reason",r.exitWhy||r.outcome||"—"],
+          ["Rule Violated?","None / Yes: ___"],
+          ["What I Did Well",""],
+          ["What I Will Do Differently",""],
+        ]);
+        b+=SP();
+      });
+    } else {
+      b+=P("No closed trades logged this week.",true,"#666");
+    }
+    b+=SP()+SP();
+    b+=H1("SECTION IV — MARKET READ ACCURACY");
+    b+=TABLE(["Pair","Pre-Week Bias","Actual Direction","Accuracy","Lesson"],[
+      ["EUR/USD","Bullish/Bearish/Neutral","Higher/Lower/Sideways","Correct/Wrong/Partial",""],
+      ["GBP/USD","","","",""],
+      ["USD/JPY","","","",""],
+    ]);
+    b+=H1("SECTION V — RULES COMPLIANCE");
+    b+=TABLE(["NBS Rule","Followed?","Notes"],
+      ["Entered only with 4+ / 6 confluence","Set-and-forget — no premature closes","No entries during Tier-1 news windows","1% risk per trade","Max 2% concurrent risk","COT checked before any entry","Written macro note before every entry","Max 3 trades this week"].map(function(rule){return [rule,"Yes / No",""];})
+    );
+    b+=SP()+SP();
+    b+=H1("SECTION VI — NEXT WEEK SETUP");
+    b+=TW([
+      ["Priority Pair","Pair with strongest upcoming setup: ___"],
+      ["Direction","Long / Short"],
+      ["Key Level to Watch","___"],
+      ["News Risk","Major events: ___"],
+      ["Mental State Assessment","Green / Amber / Red"],
+      ["One Rule to Reinforce","___"],
+    ]);
+    b+=DARK_BOX([
+      ["WEEKLY COMMITMENT:",true,false,"C9A227"],
+      ["I commit to set-and-forget on every trade next week. I will not close early under any circumstance except a confirmed 4H structural break.",false,false,"FFFFFF"],
+    ]);
+    return htmlDoc("Weekly Review",curReport.label,b);
+  }
+
+  function buildBiweeklyPlanning(){
+    var bwStart=selBiweekStartDate(),bwEnd=selBiweekEndDate();
+    var b="";
+    b+=logo("BI-WEEKLY PLANNING REPORT","Two-Week Macro Outlook — Written 1st and 15th of Each Month");
+    b+=SP()+SP();
+    b+=H1("REPORT INFORMATION");
+    b+=TW([
+      ["Period",fmtDate(bwStart)+" to "+fmtDate(bwEnd)],
+      ["Written On",fmtDate(new Date())],
+      ["Pairs Covered","EUR/USD  |  GBP/USD  |  USD/JPY"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION I — MACRO ENVIRONMENT (2-WEEK VIEW)");
+    b+=H2("1.1  DXY — 2-Week Direction");
+    b+=TW([
+      ["DXY 2-Week Bias","Bullish / Bearish / Neutral"],
+      ["Key Structural Level","Support: ___  |  Resistance: ___"],
+      ["Dominant Force","Fed policy / Risk sentiment / Data flow"],
+    ]);
+    b+=SP();
+    b+=H2("1.2  Central Bank — 2-Week Outlook");
+    b+=TW([
+      ["Fed (USD)","Stance: ___  |  Next meeting: ___  |  Implication: ___"],
+      ["BOE (GBP)","Stance: ___  |  Next meeting: ___  |  Implication: ___"],
+      ["BOJ (JPY)","Stance: ___  |  Intervention risk: ___  |  Implication: ___"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION II — STRUCTURAL SETUP PIPELINE");
+    b+=P("Setups forming now that may trigger in 5-10 trading days.",true,"#666");
+    b+=SP();
+    b+=H2("2.1  EUR/USD — 2-Week View");
+    b+=TW([
+      ["Weekly Structure","Uptrend / Downtrend / Ranging — key level: ___"],
+      ["Setup Forming","BOS confirmed / Waiting at ___ / Zone at ___ / No setup"],
+      ["Zone Level","Top: ___  |  Bottom: ___  |  Distance: ___ pips"],
+      ["Time to Zone (est)","This week / Next week / Unclear"],
+      ["Zone Pre-Score","___ / 6"],
+      ["2-Week Macro Bias","Bullish / Bearish / Neutral"],
+    ]);
+    b+=SP();
+    b+=H2("2.2  GBP/USD — 2-Week View");
+    b+=TW([
+      ["Weekly Structure","Uptrend / Downtrend / Ranging"],
+      ["Setup Forming","BOS confirmed / Waiting / Zone forming / No setup"],
+      ["Zone Level","Top: ___  |  Bottom: ___"],
+      ["Time to Zone (est)","This week / Next week"],
+      ["2-Week Macro Bias","Bullish / Bearish / Neutral"],
+    ]);
+    b+=SP();
+    b+=H2("2.3  USD/JPY — 2-Week View");
+    b+=TW([
+      ["Weekly Structure","Uptrend / Downtrend / Ranging"],
+      ["BOJ Risk","Meeting: [date] / Intervention risk: elevated / low"],
+      ["Setup Forming","BOS confirmed / Waiting / No setup"],
+      ["Zone Level","Top: ___  |  Bottom: ___"],
+      ["2-Week Macro Bias","Bullish / Bearish / Neutral"],
+    ]);
+    b+=SP()+SP();
+    b+=H1("SECTION III — 2-WEEK EVENTS & POSITIONING");
+    b+=TABLE(["Date","Event","Currency","Impact","Implication"],
+      [1,2,3,4,5,6].map(function(){return ["","","","",""];})
+    );
+    b+=TABLE(["Pair","2-Wk Bias","Setup Status","Risk Allocation"],[
+      ["EUR/USD","Bullish/Bearish/Neutral","Active/Forming/None","1% / 0.5% / Skip"],
+      ["GBP/USD","","",""],
+      ["USD/JPY","","",""],
+    ]);
+    b+=DARK_BOX([
+      ["2-WEEK THESIS IN 3 SENTENCES:",true,false,"C9A227"],
+      ["Sentence 1 — The environment: ___",false,false,"FFFFFF"],
+      ["Sentence 2 — Highest probability directional move: ___",false,false,"FFFFFF"],
+      ["Sentence 3 — Condition that invalidates this thesis: ___",false,false,"AAAAAA"],
+    ]);
+    return htmlDoc("Bi-Weekly Planning",curReport.label,b);
+  }
+
+  function buildBiweeklyReview(){
+    var bwStart=selBiweekStartDate();
+    var twoWeeksAgo=new Date(bwStart);twoWeeksAgo.setDate(twoWeeksAgo.getDate()-14);
+    var pTrades=tradesInRange(twoWeeksAgo,bwStart);
+    var cl=closedIn(pTrades);
+    var wr=winRate(pTrades);
+    var nr=netR(pTrades);
+    var np=netPct(pTrades);
+    var wins=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0;});
+    var losses=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)<0;});
+    var mfe=mfeAnalysis(pTrades);
+    var ats=allTimeStats();
+    var dayMap={};
+    cl.forEach(function(t){
+      var d=parseDate(t.timestamp);if(!d)return;
+      var day=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()];
+      if(!dayMap[day])dayMap[day]={total:0,wins:0};
+      dayMap[day].total++;
+      if(parseFloat(getCanonicalRes(t).actualPct)>0)dayMap[day].wins++;
+    });
+    var b="";
+    b+=logo("BI-WEEKLY PERFORMANCE REVIEW","Two-Week Debrief — Written 15th & Last Day of Each Month");
+    b+=SP()+SP();
+    b+=H1("REPORT INFORMATION");
+    b+=TW([
+      ["Period",fmtDate(twoWeeksAgo)+" to "+fmtDate(bwStart)],
+      ["Net P&L (2-week)",formatR(nr)+"  ("+formatPct(np)+")"],
+      ["Trades",cl.length+"  |  "+wins.length+" wins / "+losses.length+" losses"],
+      ["Win Rate",wr+"%"],
+      ["Early Exits",mfe.earlyCount+" this period"],
+      ["All-Time Win Rate",ats.wr+"%  |  Sharpe: "+ats.sharpe.toFixed(2)+"  |  Max DD: "+ats.maxDD.toFixed(2)+"%"],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION I — TWO-WEEK TRADE LOG");
+    b+=TABLE(["#","Date","Pair","Dir","Entry","Exit","R","Exit Type","Confluence"],
+      cl.length>0?cl.map(function(t,i){
+        var r=getCanonicalRes(t);
+        var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+        var rMult=rp>0?(ap/rp).toFixed(2)+"R":"—";
+        var isEarly=r.exitWhy&&r.exitWhy.toLowerCase().includes("early");
+        var score=(t.c1?1:0)+(t.c2?1:0)+(t.c3?1:0)+(t.c4?1:0)+(t.c5?1:0)+(t.c6?1:0)+(t.c7?1:0)+(t.c8?1:0);
+        return [i+1,t.timestamp?t.timestamp.substring(0,9):"—",t.pair||"—",t.direction||"—",t.entry||"—",r.exitPrice||"—",
+          {v:rMult,bg:ap>0?"EAF5EF":ap<0?"F5EAEA":"FFFFFF"},
+          {v:isEarly?"Early Close":r.outcome||"—",bg:isEarly?"FFF8E1":"FFFFFF"},
+          score+"/8"];
+      }):[["No trades in this period","—","—","—","—","—","—","—","—"]]
+    );
+    b+=GOLD_BOX([
+      ["PERIOD: "+formatR(nr)+"  ("+formatPct(np)+")  |  "+cl.length+" trades  |  "+wr+"% WR  |  "+mfe.earlyCount+" early exits",true],
+      ["All-time running: "+ats.total+" trades  |  "+ats.wr+"% WR  |  Sharpe "+ats.sharpe.toFixed(2),false],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SECTION II — PATTERN ANALYSIS");
+    b+=H2("2.1  Win Rate by Day of Entry");
+    b+=TABLE(["Day","Entries","Wins","Win Rate","Pattern Note"],
+      ["Mon","Tue","Wed","Thu","Fri"].map(function(day){
+        var dm=dayMap[day]||{total:0,wins:0};
+        var wr2=dm.total?Math.round(dm.wins/dm.total*100):0;
+        var note=day==="Mon"||day==="Tue"?"Mon/Tue — check for trap entries":day==="Wed"||day==="Thu"?"Prime window — confirm trend":"Should be 0 new entries";
+        return [day,String(dm.total),String(dm.wins),dm.total?wr2+"%":"—",note];
+      })
+    );
+    b+=SP();
+    b+=H2("2.2  Early Exit Analysis");
+    b+=TW([
+      ["Early Exits This Period",String(mfe.earlyCount)],
+      ["Cumulative Early Exits",String(mfeAnalysis(trades).earlyCount)+" all time"],
+      ["Cost (estimated)","Calculate: each early exit = (target R — actual R) × account %"],
+      ["Pattern","___"],
+      ["Fix","___"],
+    ]);
+    b+=SP()+SP();
+    b+=H1("SECTION III — SYSTEM HEALTH");
+    b+=TABLE(["Metric","Target","Actual","Status"],[
+      ["2-Week Win Rate",">35%",wr+"%",{v:wr>=35?"On Track":"Below Target",bg:wr>=35?"EAF5EF":"F5EAEA"}],
+      ["Early Exits","0",String(mfe.earlyCount),{v:mfe.earlyCount===0?"Clean":"Needs Work",bg:mfe.earlyCount===0?"EAF5EF":"F5EAEA"}],
+      ["Trades Taken","2-6",String(cl.length),"—"],
+    ]);
+    b+=SP();
+    b+=H1("SECTION IV — NEXT 2-WEEK PRIORITIES");
+    b+=TW([
+      ["Priority Pair","___"],
+      ["Key Structural Level","___"],
+      ["Main Risk Event","___"],
+      ["Rule to Reinforce","___"],
+      ["Mental Reset Needed?","Yes / No"],
+    ]);
+    return htmlDoc("Bi-Weekly Review",curReport.label,b);
+  }
+
+  function buildMonthlyInvestor(){
+    var mStart=selMonthStartDate();
+    var mEnd=selMonthEndDate();
+    var mTrades=tradesInRange(mStart,mEnd);
+    var cl=closedIn(mTrades);
+    var wr=winRate(mTrades);
+    var nr=netR(mTrades);
+    var np=netPct(mTrades);
+    var wins=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)>0;});
+    var losses=cl.filter(function(t){return parseFloat(getCanonicalRes(t).actualPct)<0;});
+    var mfe=mfeAnalysis(mTrades);
+    var ats=allTimeStats();
+    var monthName=mStart.toLocaleString("en-GB",{month:"long",year:"numeric"});
+    var b="";
+    b+=logo("MONTHLY INVESTOR REPORT",monthName+" — Institutional Performance Summary");
+    b+=SP()+SP();
+    b+=H1("EXECUTIVE SUMMARY");
+    b+=TW([
+      ["Month",monthName],
+      ["Net P&L",formatR(nr)+"  ("+formatPct(np)+")"],
+      ["Trades Taken",cl.length+" total  |  "+wins.length+" wins / "+losses.length+" losses"],
+      ["Win Rate",wr+"%"],
+      ["Early Exits",mfe.earlyCount],
+      ["All-Time Win Rate",ats.wr+"%"],
+      ["All-Time Sharpe",ats.sharpe.toFixed(2)],
+      ["Max Drawdown (all-time)",ats.maxDD.toFixed(2)+"%"],
+      ["Profit Factor",ats.pf.toFixed(2)],
+    ]);
+    b+=GOLD_BOX([
+      ["MONTHLY RESULT: "+formatR(nr)+"  |  "+formatPct(np)+"  |  "+cl.length+" trades  |  "+wr+"% win rate",true],
+      ["This result is consistent with the NBS system's positive expectancy: +2.11 skew, institutional methodology.",false],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("TRADE LOG — "+monthName.toUpperCase());
+    b+=TABLE(["#","Date","Pair","Dir","Entry","Exit","R","Exit Type","Confluence"],
+      cl.length>0?cl.map(function(t,i){
+        var r=getCanonicalRes(t);
+        var ap=parseFloat(r.actualPct||0),rp=parseFloat(t.riskPct||1);
+        var rMult=rp>0?(ap/rp).toFixed(2)+"R":"—";
+        var isEarly=r.exitWhy&&r.exitWhy.toLowerCase().includes("early");
+        var score=(t.c1?1:0)+(t.c2?1:0)+(t.c3?1:0)+(t.c4?1:0)+(t.c5?1:0)+(t.c6?1:0)+(t.c7?1:0)+(t.c8?1:0);
+        return [i+1,t.timestamp?t.timestamp.substring(0,9):"—",t.pair||"—",t.direction||"—",t.entry||"—",r.exitPrice||"—",
+          {v:rMult,bg:ap>0?"EAF5EF":ap<0?"F5EAEA":"FFFFFF"},
+          {v:isEarly?"Early Close":r.outcome||"—",bg:isEarly?"FFF8E1":"FFFFFF"},
+          score+"/8"];
+      }):[["No trades this month","—","—","—","—","—","—","—","—"]]
+    );
+    b+=SP()+SP()+PB();
+    b+=H1("MACRO ENVIRONMENT — "+monthName.toUpperCase());
+    b+=H2("Central Bank Actions");
+    b+=TW([
+      ["Federal Reserve","Stance: ___  |  Key action: ___  |  Language shift: ___"],
+      ["Bank of England","Stance: ___  |  Key action: ___  |  Language shift: ___"],
+      ["Bank of Japan","Stance: ___  |  Key action: ___  |  Intervention: ___"],
+      ["CB Divergence Theme","The dominant divergence and its FX impact: ___"],
+    ]);
+    b+=SP();
+    b+=H2("Capital Flows & COT Accuracy");
+    b+=TW([
+      ["Risk Appetite","Risk-ON / Risk-OFF / Mixed — driver: ___"],
+      ["COT Signals Accurate?","What worked: ___  |  What did not: ___"],
+      ["Biggest Market Event","Event: ___  |  Impact on positions: ___"],
+    ]);
+    b+=SP()+SP();
+    b+=H1("NOTE TO PROSPECTIVE INVESTORS");
+    b+=GOLD_BOX([
+      ["Write 3 paragraphs:",true],
+      ["Para 1: Current stage — prop trading bootstrap. Track record objective and timeline.",false],
+      ["Para 2: How capital will be deployed when accepted — Singapore VCC, MAS licensing, fee structure.",false],
+      ["Para 3: Long-term vision — NGC Sovereign Conglomerate, $500M+ AUM target.",false],
+      ["YOUR TEXT: ___",true],
+    ]);
+    b+=SP();
+    b+=P("RISK DISCLOSURE: Trading foreign exchange carries significant risk of loss. Past performance is not indicative of future results. This document is for information purposes only and does not constitute an offer to invest. All capital is at risk.",true,"#888");
+    return htmlDoc("Monthly Investor Report",curReport.label,b);
+  }
+
+  function buildMarketOutlook(){
+    var now=new Date();
+    var monthName=now.toLocaleString("en-GB",{month:"long",year:"numeric"});
+    var m6=new Date(now);m6.setMonth(m6.getMonth()+6);
+    var ats=allTimeStats();
+    var b="";
+    b+=logo("MARKET OUTLOOK REPORT","Near-Term (1 Month) + Medium-Term (3-6 Month) — First Sunday of Each Month");
+    b+=SP()+SP();
+    b+=H1("REPORT INFORMATION");
+    b+=TW([
+      ["Written On",fmtDate(new Date())],
+      ["Near-Term Window",monthName+" — 4-week view"],
+      ["Medium-Term Window",fmtDate(now)+" to "+fmtDate(m6)+" — 3 to 6 month structural view"],
+      ["Pairs Covered","EUR/USD  |  GBP/USD  |  USD/JPY"],
+      ["Current Win Rate",ats.wr+"%  all-time"],
+      ["Sharpe Ratio",ats.sharpe.toFixed(2)],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("PART 1 — NEAR-TERM THESIS (THIS MONTH)");
+    b+=GOLD_BOX([
+      ["Write the single most important macro force in FX markets right now.",true],
+      ["CB policy divergence + COT positioning + capital flow story + seasonality.",false],
+      ["YOUR NEAR-TERM THESIS: ___",true],
+    ]);
+    b+=SP();
+    b+=H2("1.1  Central Bank Policy — This Month");
+    b+=TABLE(["CB","Stance","Expected Action","Key Meeting/Data","FX Implication"],[
+      ["Fed","Hiking/Pausing/Cutting","No change / Cut / Hike","FOMC [date] / None","USD: stronger/weaker/neutral"],
+      ["BOE","","","BOE [date] / None","GBP: ±"],
+      ["BOJ","Ultra-loose/Normalising","","BOJ [date] / None","JPY: ±"],
+    ]);
+    b+=SP();
+    b+=H2("1.2  Near-Term Pair Outlook");
+    b+=TABLE(["Pair","1-Month Direction","Macro Backing","Seasonal","Confidence"],[
+      ["EUR/USD","Bullish/Bearish/Neutral","Strong/Moderate/None","Supports/Opposes/Neutral","High/Medium/Low"],
+      ["GBP/USD","","","",""],
+      ["USD/JPY","","","",""],
+    ]);
+    b+=SP();
+    b+=H2("1.3  Near-Term Key Levels");
+    b+=TABLE(["Pair","Weekly Resistance","Weekly Support","Key Zone","Bias Change Level"],[
+      ["EUR/USD","___","___","___","Above ___ = more bullish"],
+      ["GBP/USD","___","___","___","___"],
+      ["USD/JPY","___","___","___","___"],
+    ]);
+    b+=SP();
+    b+=H2("1.4  Near-Term Invalidation");
+    b+=TW([
+      ["EUR/USD thesis void if","e.g. Breaks below weekly structure at ___ / Fed hawkish surprise"],
+      ["GBP/USD thesis void if","___"],
+      ["USD/JPY thesis void if","e.g. BOJ surprise hike / Break above ___"],
+      ["Review Date",fmtDate(new Date(now.getTime()+28*24*3600*1000))],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("PART 2 — MEDIUM-TERM STRUCTURAL THESIS (3-6 MONTHS)");
+    b+=GOLD_BOX([
+      ["Write the macro story institutions are pricing over the next 3-6 months.",true],
+      ["Rate cycle + growth differential + structural capital flows + CB divergence trajectory.",false],
+      ["YOUR 3-6 MONTH THESIS: ___",true],
+    ]);
+    b+=SP();
+    b+=H2("2.1  Global Rate Cycle");
+    b+=TABLE(["Economy","Rate Position","Direction","Next Phase Timeline","3-6m FX Impact"],[
+      ["US (USD)","Peak/Cutting/Hiking","More dovish/hawkish","3-6m / 6-12m","USD weakens/strengthens"],
+      ["UK (GBP)","","","","GBP: ___"],
+      ["Japan (JPY)","Normalising from zero","Toward higher rates","BOJ likely to hike: ___","JPY: strengthening"],
+    ]);
+    b+=SP();
+    b+=H2("2.2  3-6 Month Directional View");
+    b+=TABLE(["Pair","3-Month Dir","6-Month Dir","Primary Driver","Confidence"],[
+      ["EUR/USD","Bullish/Bearish/Neutral","","CB divergence / Growth / Flows","High/Med/Low"],
+      ["GBP/USD","","","",""],
+      ["USD/JPY","","","",""],
+    ]);
+    b+=SP()+SP()+PB();
+    b+=H1("SYNTHESIS — NEAR VS MEDIUM TERM ALIGNMENT");
+    b+=TABLE(["Pair","Near-Term","Medium-Term","Aligned?","Sizing Implication"],[
+      ["EUR/USD","Bullish/Bearish/Neutral","","Yes/No","Both aligned = 1% full / Conflicting = 0.5%"],
+      ["GBP/USD","","","",""],
+      ["USD/JPY","","","",""],
+    ]);
+    b+=DARK_BOX([
+      ["TRADE SIZING RULE:",true,false,"C9A227"],
+      ["Near + medium-term both aligned: Full 1% risk. Hold to maximum structural target (7-9R).",false,false,"FFFFFF"],
+      ["Near-term only: 0.75% risk. Take profit at 4-5R.",false,false,"CCCCCC"],
+      ["Near + medium-term opposing: 0.5% max. Counter-trend only. Exit at 3R.",false,false,"AAAAAA"],
+      ["All layers aligned + COT extreme + seasonal tailwind = A++ trade. Maximum size.",true,false,"C9A227"],
+    ]);
+    b+=SP()+SP();
+    b+=H1("MONTHLY SUMMARY");
+    b+=TW([
+      ["Month",monthName],
+      ["Near-Term Dominant Theme","___"],
+      ["EUR/USD 1-Month View","Direction: ___  |  Key level: ___  |  Confidence: High/Med/Low"],
+      ["GBP/USD 1-Month View","Direction: ___  |  Key level: ___  |  Confidence: High/Med/Low"],
+      ["USD/JPY 1-Month View","Direction: ___  |  Key level: ___  |  Confidence: High/Med/Low"],
+      ["Medium-Term Structural Bias","EUR: ___  |  GBP: ___  |  JPY: ___"],
+      ["Best Setup Expected","Pair: ___  |  Direction: ___  |  Why: ___"],
+      ["Near-Term Invalidation","___"],
+      ["Review Date",fmtDate(new Date(now.getTime()+28*24*3600*1000))],
+    ]);
+    return htmlDoc("Market Outlook",curReport.label,b);
+  }
+
+  // ── REPORT CONFIGS ────────────────────────────────────────────────────────
+  var reports={
+    weekly:{
+      planning:{label:"Weekly Planning",fn:buildWeeklyPlanning,desc:"Pre-week intelligence brief. Write every Sunday.",file:function(){return "NGC_Weekly_Planning_"+selWeekDate+".pdf";}},
+      review:{label:"Weekly Review",fn:buildWeeklyReview,desc:"Post-week performance debrief. Write every Friday/Saturday.",file:function(){return "NGC_Weekly_Review_"+selWeekDate+".pdf";}},
+    },
+    biweekly:{
+      planning:{label:"Bi-Weekly Planning",fn:buildBiweeklyPlanning,desc:"Two-week macro outlook. Write on the 1st and 15th of each month.",file:function(){return "NGC_Biweekly_Planning_"+selBiweek+".pdf";}},
+      review:{label:"Bi-Weekly Review",fn:buildBiweeklyReview,desc:"Two-week performance review. Write on 15th and last day of month.",file:function(){return "NGC_Biweekly_Review_"+selBiweek+".pdf";}},
+    },
+    monthly:{
+      investor:{label:"Monthly Investor Report",fn:buildMonthlyInvestor,desc:"Full institutional monthly report for prospective investors.",file:function(){return "NGC_Monthly_Investor_"+selMonth+".pdf";}},
+      outlook:{label:"Market Outlook",fn:buildMarketOutlook,desc:"Near-term (1 month) + medium-term (3-6 month) macro thesis. Write on the first Sunday of each month.",file:function(){return "NGC_Market_Outlook_"+selMonth+".pdf";}},
+    },
+  };
+
+  var grpLabels={weekly:"Weekly Reports",biweekly:"Bi-Weekly Reports",monthly:"Monthly Reports"};
+  var subKeys=Object.keys(reports[grp]);
+  var curReport=reports[grp][sub]||reports[grp][subKeys[0]];
+
+  function handleDownload(){
+    setDlMsg("Building PDF...");
+    try{
+      var html=curReport.fn();
+      var fname=typeof curReport.file==="function"?curReport.file():curReport.file;
+      downloadPdf(html,fname);
+    }catch(e){
+      setDlMsg("Error: "+e.message);
+    }
+  }
+
+  // ── RENDER ────────────────────────────────────────────────────────────────
+  var GOLD_C="#c9a227";
+  var cardStyle={background:"#0d0d0d",border:"1px solid #1e1e1e",borderRadius:8,padding:"14px 16px",cursor:"pointer"};
+
+  return h("div",{className:"fade"},
+    // Group tabs
+    h("div",{style:{marginBottom:14}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:"#555",textTransform:"uppercase",marginBottom:8}},"Report Group"),
+      h("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+        Object.keys(grpLabels).map(function(g){
+          return h("button",{key:g,onClick:function(){setGrp(g);setSub(Object.keys(reports[g])[0]);},style:Object.assign({},BS,{padding:"7px 14px",fontSize:10,background:grp===g?"#171717":"none",border:"1px solid "+(grp===g?"#2a2a2a":"#151515"),color:grp===g?GOLD_C:"#555"})},grpLabels[g]);
+        })
+      )
+    ),
+    // Sub tabs
+    h("div",{style:{marginBottom:16}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:"#555",textTransform:"uppercase",marginBottom:8}},"Report Type"),
+      h("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+        Object.keys(reports[grp]).map(function(sk){
+          var rpt=reports[grp][sk];
+          return h("button",{key:sk,onClick:function(){setSub(sk);},style:Object.assign({},BS,{padding:"7px 14px",fontSize:10,background:sub===sk?"#171717":"none",border:"1px solid "+(sub===sk?"#252525":"#151515"),color:sub===sk?"white":"#555"})},rpt.label);
+        })
+      )
+    ),
+    // Date/Period selector
+    grp==="weekly"&&h("div",{style:{marginBottom:16}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:"#555",textTransform:"uppercase",marginBottom:8}},"Select Week"),
+      h("select",{value:selWeekDate,onChange:function(e){setSelWeekDate(e.target.value);},style:{background:"#0d0d0d",border:"1px solid #252525",color:"#e0e0e0",padding:"7px 12px",borderRadius:6,fontSize:11,fontFamily:"'DM Mono',monospace",width:"100%",cursor:"pointer"}},
+        genWeekOptions().map(function(o){return h("option",{key:o.val,value:o.val},o.label);})
+      )
+    ),
+    grp==="biweekly"&&h("div",{style:{marginBottom:16}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:"#555",textTransform:"uppercase",marginBottom:8}},"Select Bi-Weekly Period"),
+      h("select",{value:selBiweek,onChange:function(e){setSelBiweek(e.target.value);},style:{background:"#0d0d0d",border:"1px solid #252525",color:"#e0e0e0",padding:"7px 12px",borderRadius:6,fontSize:11,fontFamily:"'DM Mono',monospace",width:"100%",cursor:"pointer"}},
+        genBiweekOptions().map(function(o){return h("option",{key:o.val,value:o.val},o.label);})
+      )
+    ),
+    grp==="monthly"&&h("div",{style:{marginBottom:16}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:"#555",textTransform:"uppercase",marginBottom:8}},"Select Month"),
+      h("select",{value:selMonth,onChange:function(e){setSelMonth(e.target.value);},style:{background:"#0d0d0d",border:"1px solid #252525",color:"#e0e0e0",padding:"7px 12px",borderRadius:6,fontSize:11,fontFamily:"'DM Mono',monospace",width:"100%",cursor:"pointer"}},
+        genMonthOptions().map(function(o){return h("option",{key:o.val,value:o.val},o.label);})
+      )
+    ),
+    // Report card
+    h("div",{style:{background:"#0a0a0a",border:"1px solid #1a1a1a",borderRadius:10,padding:"20px",marginBottom:16}},
+      h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}},
+        h("div",null,
+          h("div",{style:{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:GOLD_C,letterSpacing:1,marginBottom:4}},curReport.label),
+          h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#555",lineHeight:1.6,maxWidth:480}},curReport.desc)
+        ),
+        h("button",{onClick:handleDownload,style:Object.assign({},BS,{background:"rgba(201,162,39,.12)",border:"1px solid rgba(201,162,39,.35)",color:GOLD_C,padding:"10px 20px",fontSize:11,borderRadius:7})},
+          "↓ Download PDF"
+        )
+      ),
+      dlMsg&&h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:dlMsg.includes("Error")?"#ff4444":"#34d399",marginTop:10,padding:"8px 12px",background:dlMsg.includes("Error")?"rgba(255,68,68,.06)":"rgba(52,211,153,.06)",borderRadius:6,border:"1px solid "+(dlMsg.includes("Error")?"rgba(255,68,68,.2)":"rgba(52,211,153,.2)")}},dlMsg)
+    ),
+    // What auto-populates
+    h("div",{style:{background:"#080808",border:"1px solid #141414",borderRadius:8,padding:"14px 16px"}},
+      h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,letterSpacing:3,color:GOLD_C,textTransform:"uppercase",marginBottom:10}},"Auto-populated from your journal"),
+      h("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}},
+        [
+          ["All-Time Trades",String(closedIn(trades).length)+" closed"],
+          ["All-Time Win Rate",allTimeStats().wr+"%"],
+          ["All-Time Sharpe",allTimeStats().sharpe.toFixed(2)],
+          ["Max Drawdown",allTimeStats().maxDD.toFixed(2)+"%"],
+          ["This Week Trades",String(closedIn(tradesInRange(lastMonday(),addD(lastMonday(),5))).length)+" closed"],
+          ["This Month Trades",String(closedIn(tradesInRange(monthStart(0),monthStart(1))).length)+" closed"],
+        ].map(function(item){
+          return h("div",{key:item[0],style:{background:"#111",borderRadius:6,padding:"10px 12px"}},
+            h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:9,color:"#444",letterSpacing:2,textTransform:"uppercase",marginBottom:3}},item[0]),
+            h("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:15,fontWeight:"bold",color:"#e0e0e0"}},item[1])
+          );
+        })
+      )
+    )
+  );
+}
+
 function App(){
   var trState=useState([]);var trades=trState[0],setTrades=trState[1];
   var fiState=useState(DEF_FIRMS);var firms=fiState[0],setFirms=fiState[1];
@@ -2367,6 +4272,7 @@ function App(){
     h("div",{style:{maxWidth:720,margin:"0 auto",padding:"15px 13px"}},
       page==="new"&&h(NewTradeForm,{onSave:function(t){addTrade(t);setPage("journal")},onCancel:function(){setPage("journal")},firms:firms,trades:trades}),
       page==="journal"&&h("div",{className:"fade"},
+        h(SecurityBanner,null),
         h(StatsBar,{trades:trades}),
         h("div",{style:{display:"flex",gap:4,marginBottom:11,flexWrap:"wrap"}},
           ["all","open","Win","Loss","Breakeven"].map(function(fv){return h("button",{key:fv,onClick:function(){setFilter(fv)},style:Object.assign({},BS,{padding:"5px 9px",fontSize:9,background:filter===fv?"#171717":"none",border:"1px solid "+(filter===fv?"#252525":"#111"),color:filter===fv?"white":"#444"})},fv)})
@@ -2389,4 +4295,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(h(App,null));
 })();
 </script>
 </body>
-</html> 
+</html>
